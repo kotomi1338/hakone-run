@@ -11,6 +11,7 @@ import {
   type SectionConfig,
   type SlopeConfig,
 } from "./config";
+import { generateItemLayout, type CourseItem, type ItemLayout, type Random } from "./items";
 import {
   emptySectionScore,
   relayPoints,
@@ -50,17 +51,26 @@ export class Race {
   private readonly course: CourseConfig;
   private readonly score: ScoreConfig;
   private readonly slope: SlopeConfig;
+  /** このレースの給水・応援・黒たまごの配置（給水と黒たまごはレースごとにランダム） */
+  readonly itemLayout: ItemLayout;
 
   constructor(
     startIndex = 0,
     course: CourseConfig = COURSE_CONFIG,
     score: ScoreConfig = SCORE_CONFIG,
     slope: SlopeConfig = SLOPE_CONFIG,
+    random: Random = Math.random,
   ) {
     this.sectionIndex = Math.min(Math.max(0, startIndex), SECTIONS.length - 1);
     this.course = course;
     this.score = score;
     this.slope = slope;
+    this.itemLayout = generateItemLayout(random);
+  }
+
+  /** その区間の給水・応援・黒たまご（距離の順） */
+  itemsOf(sectionNo: number): readonly CourseItem[] {
+    return this.itemLayout[sectionNo] ?? [];
   }
 
   /** 今走っている区間のポイント（走り始めたら作られる） */

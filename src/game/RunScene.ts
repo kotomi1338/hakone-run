@@ -3,7 +3,7 @@ import { createTextures, FAN_COLORS } from "./art/textures";
 import { playSe, preloadSounds, startBgm, stopBgm } from "./audio";
 import { COURSE_CONFIG, RUN_CONFIG, SCORE_CONFIG, type SectionConfig } from "./config";
 import { bindGameKeys, formatTime } from "./input";
-import { isSunny, ITEM_ACTIONS, ITEM_NAMES, ItemTracker, sunnyZoneOf, type ItemKind, type ItemResult } from "./items";
+import { isSunny, ITEM_ACTIONS, ITEM_NAMES, ItemTracker, itemWindows, sunnyZoneOf, type ItemKind, type ItemResult } from "./items";
 import { FONT, GAME_HEIGHT, GAME_WIDTH, TEXT_COLOR } from "./layout";
 import { Race, sectionsOfStage, STAGE_NAMES } from "./race";
 import type { RankingSceneData } from "./RankingScene";
@@ -39,6 +39,11 @@ const GOAL_PAUSE_MS = 2200;
 const RELAY_MESSAGE_MS = 1500;
 /** 中継線までこのピクセル以内に近づいたら襷ゲージを出し、エンターを受け付ける */
 const RELAY_GAUGE_PX = 400;
+/** タイミングゲージの画面上の長さ：出ている範囲 1px あたり何 px で描くか */
+const GAUGE_PX_SCALE = 150 / RELAY_GAUGE_PX;
+/** タイミングゲージの長さの半分の最小・最大（px） */
+const GAUGE_MIN_HALF = 40;
+const GAUGE_MAX_HALF = 230;
 const HUD_DEPTH = 100;
 const RELAY_GRADE_COLORS: Record<RelayGrade, string> = { PERFECT: "#f2a900", GOOD: "#2e9e4f", MISS: "#7a7a7a" };
 const ITEM_LABEL_COLORS: Record<ItemKind, string> = { water: "#2e86de", cheer: "#e67e22", egg: "#222222" };
@@ -52,6 +57,8 @@ interface TimingTarget {
   label: string;
   perfectPx: number;
   goodPx: number;
+  /** 目印のこれだけ手前からゲージを出す（ゲージの長さもこれに比例する） */
+  gaugePx: number;
 }
 
 export interface RunSceneData {
@@ -98,7 +105,7 @@ export class RunScene extends Phaser.Scene {
   /** 給水・応援・黒たまごの看板 */
   private itemLabels: Phaser.GameObjects.Text[] = [];
   private eggImages: Phaser.GameObjects.Image[] = [];
-  /** 7区「日差しが強い」・10区「日本橋」の看板 */
+  /** 7区「日差しが強い」・10区「ここからラストスパート」の看板 */
   private zoneLabel!: Phaser.GameObjects.Text;
   private landmarkLabel!: Phaser.GameObjects.Text;
   private runnerSprite!: Phaser.GameObjects.Sprite;
@@ -465,7 +472,7 @@ export class RunScene extends Phaser.Scene {
   private trackerOf(sectionIndex: number): ItemTracker {
     let t = this.itemTrackers.get(sectionIndex);
     if (!t) {
-      t = new ItemTracker(sectionIndex + 1, SCORE_CONFIG);
+      t = new ItemTracker(sectionIndex + 1, this.race.itemsOf(sectionIndex + 1), SCORE_CONFIG);
       this.itemTrackers.set(sectionIndex, t);
     }
     return t;
@@ -479,11 +486,24 @@ export class RunScene extends Phaser.Scene {
   private timingTarget(): TimingTarget | null {
     const relay = this.relayOffset();
     if (relay) {
-      return { px: relay.px, label: "Enterで襷を渡す！", perfectPx: SCORE_CONFIG.relayPerfectMs, goodPx: SCORE_CONFIG.relayGoodMs };
+      return {
+        px: relay.px,
+        label: "Enterで襷を渡す！",
+        perfectPx: SCORE_CONFIG.relayPerfectMs,
+        goodPx: SCORE_CONFIG.relayGoodMs,
+        gaugePx: RELAY_GAUGE_PX,
+      };
     }
-    const item = this.itemTracker.target(this.runner.distanceKm, this.pxPerKm, RELAY_GAUGE_PX);
+    const item = this.itemTracker.target(this.runner.distanceKm, this.pxPerKm);
     if (item) {
-      return { px: item.offsetPx, label: ITEM_ACTIONS[item.item.kind], perfectPx: SCORE_CONFIG.itemPerfectMs, goodPx: SCORE_CONFIG.itemGoodMs };
+      const windows = itemWindows(item.item.kind, SCORE_CONFIG);
+      return {
+        px: item.offsetPx,
+        label: ITEM_ACTIONS[item.item.kind],
+        perfectPx: windows.perfect,
+        goodPx: windows.good,
+        gaugePx: windows.gauge,
+      };
     }
     return null;
   }
@@ -494,7 +514,7 @@ export class RunScene extends Phaser.Scene {
       this.judge(relay.index, judgeRelay(relay.px, SCORE_CONFIG));
       return;
     }
-    const item = this.itemTracker.target(this.runner.distanceKm, this.pxPerKm, RELAY_GAUGE_PX);
+    const item = this.itemTracker.target(this.runner.distanceKm, this.pxPerKm);
     if (item) this.applyItem(this.itemTracker.press(item));
     // 中継所やアイテムの近く以外でのエンターは何もしない
   }
@@ -597,7 +617,7 @@ export class RunScene extends Phaser.Scene {
     this.effects.updateStreaks(this.state === "running" ? this.runner.actualSpeed : 0, this.dir, time);
   }
 
-  /** 10区で日本橋を越えた瞬間 */
+  /** 10区でラストスパートの区間に入った瞬間 */
   private checkSpurtStart(): void {
     const spurt = inSpurt(this.section.no, this.runner.distanceKm);
     if (spurt && !this.wasInSpurt) {
@@ -813,7 +833,7 @@ export class RunScene extends Phaser.Scene {
     for (let i = idx; i < this.fans.length; i++) this.fans[i].setVisible(false);
   }
 
-  /** 距離表示、中継所・ゴール、給水・応援・黒たまご、日本橋 */
+  /** 距離表示、中継所・ゴール、給水・応援・黒たまご、ラストスパートのスタートライン */
   private drawCourseObjects(timeMs: number): void {
     const g = this.worldGfx;
     g.clear();
@@ -895,18 +915,17 @@ export class RunScene extends Phaser.Scene {
         }
       }
 
-      // 日本橋（ラストスパートの始まり）
+      // ラストスパートのスタートライン（紫のラインと旗）
       const spurt = spurtZoneOf(s.no);
       if (spurt) {
         const km = startKm + spurt.fromKm;
         const x = this.toScreenX(km);
         if (inView(x, 120)) {
           const top = this.roadTop(km);
-          g.fillStyle(0x8d7b68, 1).fillRect(x - 80, top + 4, 160, 10);
-          g.fillStyle(0x6f6052, 1).fillRect(x - 76, top + 14, 10, 14).fillRect(x + 66, top + 14, 10, 14);
-          // 欄干の柱飾り
-          g.fillStyle(0x3d6b4f, 1).fillRect(x - 82, top - 18, 8, 22).fillRect(x + 74, top - 18, 8, 22);
-          this.landmarkLabel.setText(`${spurt.landmark}  ラストスパート！`).setPosition(x, top - 24).setVisible(true);
+          g.fillStyle(0x8e44ad, 1).fillRect(x - 4, top + 22, 8, 106);
+          g.fillStyle(0x7a3b2e, 1).fillRect(x - 3, top - 70, 4, 92);
+          g.fillStyle(0xd291ff, 1).fillTriangle(x + 1 * this.dir, top - 70, x + 1 * this.dir, top - 44, x + 36 * this.dir, top - 57);
+          this.landmarkLabel.setText("ここからラストスパート！").setPosition(x, top - 76).setVisible(true);
         } else {
           this.landmarkLabel.setVisible(false);
         }
@@ -1025,10 +1044,11 @@ export class RunScene extends Phaser.Scene {
     this.relayGaugeText.setText(target.label);
 
     // 画面上部の真ん中（左右の表示の間）。コース上の看板や旗と重ならない高さ
+    // ゲージの長さは出ている範囲に比例（応援は長く、黒たまごは短い）。短すぎると見えないので最低限の長さはとる
     const cx = GAME_WIDTH / 2;
     const y = 94;
-    const half = 150;
-    const scale = half / RELAY_GAUGE_PX;
+    const half = Phaser.Math.Clamp(target.gaugePx * GAUGE_PX_SCALE, GAUGE_MIN_HALF, GAUGE_MAX_HALF);
+    const scale = half / target.gaugePx;
     g.fillStyle(0x10243e, 0.35).fillRoundedRect(cx - half - 6, y - 10, half * 2 + 12, 36, 8);
     g.fillStyle(0xffffff, 0.95).fillRect(cx - half, y, half * 2, 16);
     const good = target.goodPx * scale;
@@ -1167,7 +1187,7 @@ export class RunScene extends Phaser.Scene {
     }
     const spurt = this.lastSpurt.zone;
     if (spurt) {
-      if (km < spurt.fromKm) return `${spurt.landmark}（${spurt.fromKm}km）からラストスパート`;
+      if (km < spurt.fromKm) return `${spurt.fromKm}kmからラストスパート`;
       const avg = this.lastSpurt.average ?? 0;
       const est = this.lastSpurt.bonus(RUN_CONFIG, SCORE_CONFIG);
       return `ラストスパート！ 勢い ${Math.round(avg * 100)}%  +${est}見込み`;

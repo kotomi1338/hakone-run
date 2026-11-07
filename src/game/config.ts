@@ -138,10 +138,20 @@ export interface ScoreConfig {
   downhillTargetEffort: number;
   /** 坂ボーナス（6区）：目安以上の勢いで下った 1km あたりのポイント */
   downhillPointsPerKm: number;
-  /** 給水・応援・黒たまご：目印とのずれがこのミリ秒以内なら PERFECT（最高速のとき。画面のピクセルと同じ） */
-  itemPerfectMs: number;
-  /** 給水・応援・黒たまご：このミリ秒以内なら GOOD。これより大きくずれると取り損ね */
-  itemGoodMs: number;
+  /** 応援：目印のこのミリ秒手前からゲージを出し、エンターを受け付ける（最高速のとき。画面のピクセルと同じ） */
+  cheerGaugeMs: number;
+  /** 応援（かんたん）：目印とのずれがこのミリ秒以内なら PERFECT */
+  cheerPerfectMs: number;
+  /** 応援：このミリ秒以内なら GOOD。これより大きくずれると取り損ね */
+  cheerGoodMs: number;
+  /** 給水：ゲージを出し始める距離（ミリ秒） */
+  waterGaugeMs: number;
+  /** 給水（ふつう）：PERFECT の幅 */
+  waterPerfectMs: number;
+  /** 給水：GOOD の幅 */
+  waterGoodMs: number;
+  /** 黒たまご（むずかしい）：PERFECT の幅。GOOD はなく、これより大きくずれると取り損ね。ゲージもこの幅の中だけ出る */
+  eggPerfectMs: number;
   /** GOOD のときにもらえる割合（PERFECT の何倍か） */
   itemGoodRatio: number;
   waterPoints: number;

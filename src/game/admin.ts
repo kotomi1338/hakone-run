@@ -133,8 +133,13 @@ export function setupAdmin(game: Phaser.Game): () => void {
   scoring.add(SCORE_CONFIG, "summitBonus", 0, 5000, 50).name("5区 最高地点(pt)");
   scoring.add(SCORE_CONFIG, "downhillTargetEffort", 0, 1, 0.05).name("6区 下りの目安(勢い)");
   scoring.add(SCORE_CONFIG, "downhillPointsPerKm", 0, 500, 5).name("6区 下り1km(pt)");
-  scoring.add(SCORE_CONFIG, "itemPerfectMs", 0, 400, 5).name("アイテムPERFECT幅(ms)");
-  scoring.add(SCORE_CONFIG, "itemGoodMs", 0, 400, 5).name("アイテムGOOD幅(ms)");
+  scoring.add(SCORE_CONFIG, "cheerGaugeMs", 0, 1000, 10).name("応援ゲージの範囲(ms)");
+  scoring.add(SCORE_CONFIG, "cheerPerfectMs", 0, 400, 5).name("応援PERFECT幅(ms)");
+  scoring.add(SCORE_CONFIG, "cheerGoodMs", 0, 400, 5).name("応援GOOD幅(ms)");
+  scoring.add(SCORE_CONFIG, "waterGaugeMs", 0, 1000, 10).name("給水ゲージの範囲(ms)");
+  scoring.add(SCORE_CONFIG, "waterPerfectMs", 0, 400, 5).name("給水PERFECT幅(ms)");
+  scoring.add(SCORE_CONFIG, "waterGoodMs", 0, 400, 5).name("給水GOOD幅(ms)");
+  scoring.add(SCORE_CONFIG, "eggPerfectMs", 0, 400, 5).name("黒たまごPERFECT幅(ms)");
   scoring.add(SCORE_CONFIG, "itemGoodRatio", 0, 1, 0.05).name("GOODでもらえる割合");
   scoring.add(SCORE_CONFIG, "waterPoints", 0, 2000, 10).name("給水(pt)");
   scoring.add(SCORE_CONFIG, "cheerPoints", 0, 2000, 10).name("応援(pt)");

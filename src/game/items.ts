@@ -1,11 +1,14 @@
 // 給水・応援・黒たまご。画面（Phaser）に依存しない。
 //
-// コース上の決まった場所（全員同じ）に置いてあり、目印に重なった瞬間にエンターを押すと受け取れる。
-// 判定は襷と同じ：ずれが小さければ PERFECT（満点）、少しずれたら GOOD（半分など）、大きくずれたら取り損ね。
-// 押さずに通り過ぎても取り損ね。罰はない。
+// 目印に重なった瞬間にエンターを押すと受け取れる。押さずに通り過ぎると取り損ね（罰はない）。
+// 3種類で難しさに差をつけている：
+//   応援     かんたん  各区間に1回・場所は固定。判定の幅が広い
+//   給水     ふつう    各区間に1〜2回（全10区間で合計15回）。毎回ランダム。判定の幅は中くらい
+//   黒たまご むずかしい 4・5・7・8・9区に1つずつ。毎回ランダム。PERFECT のみ（GOOD なし）
+// ランダムな配置は、区間ごとに用意した3パターンの中から毎回選ぶ。
 
 import type { ScoreConfig } from "./config";
-import { judgeRelay, type RelayGrade } from "./score";
+import type { RelayGrade } from "./score";
 
 export type ItemKind = "water" | "cheer" | "egg";
 
@@ -26,27 +29,68 @@ export const ITEM_ACTIONS: Record<ItemKind, string> = {
 export const ITEM_END_MARGIN_KM = 2;
 /** アイテムどうしの最小間隔（km） */
 export const ITEM_MIN_GAP_KM = 2;
+/** 給水の合計回数（全10区間） */
+export const TOTAL_WATER = 15;
+export const SECTION_COUNT = 10;
+/** 黒たまごが出る区間 */
+export const EGG_SECTIONS = [4, 5, 7, 8, 9];
 
-const w = (km: number): CourseItem => ({ km, kind: "water" });
-const c = (km: number): CourseItem => ({ km, kind: "cheer" });
-const e = (km: number): CourseItem => ({ km, kind: "egg" });
+/** 応援の場所（固定・各区間1回） */
+const CHEER_KM: Record<number, number> = { 1: 4, 2: 5, 3: 6, 4: 3, 5: 2, 6: 2, 7: 5, 8: 4, 9: 5, 10: 4 };
 
-/** 区間ごとの配置。給水は実際の箱根駅伝と同じく 10km・15km 付近。黒たまごは 5区・6区が中心 */
-const ITEMS: Record<number, CourseItem[]> = {
-  1: [c(4), w(10), w(15), c(18)],
-  2: [c(5), w(10), w(15), c(19)],
-  3: [c(6), w(10), w(15), c(18)],
-  4: [c(3), w(10), e(13), w(15)],
-  5: [c(2), e(6), w(10), e(13), w(15), e(18)],
-  6: [e(3), e(7), w(10), e(13), w(15), c(18)],
-  7: [e(2), c(5), w(10), w(15), c(18)],
-  8: [c(4), w(10), w(15), c(19)],
-  9: [c(5), w(10), w(15), c(19)],
-  10: [c(4), w(10), w(15), c(18)],
+interface Pattern {
+  /** 給水の場所。給水が1回の区間では最初の1つだけ使う */
+  water: [number, number];
+  /** 黒たまごの場所（黒たまごの出る区間だけ使う） */
+  egg: number;
+}
+
+/**
+ * 区間ごとの3パターン。給水の1つ目は 8〜12km なので、7区の日差しが強い区間（8〜16km）に必ず入る。
+ * どのパターンでも、応援・給水・黒たまごどうしは2km以上離れ、区間の最後の2kmには置かない。
+ */
+const BASE_PATTERNS: Pattern[] = [
+  { water: [10, 15], egg: 6 },
+  { water: [8, 13], egg: 16 },
+  { water: [12, 17], egg: 8 },
+];
+/** 応援と近すぎる区間は黒たまごの場所を変える */
+const EGG_OVERRIDES: Record<number, Partial<Record<number, number>>> = {
+  7: { 0: 18 }, // 応援 5km と近いので
+  9: { 0: 19 },
 };
 
-export function itemsOf(sectionNo: number): readonly CourseItem[] {
-  return ITEMS[sectionNo] ?? [];
+function patternsOf(sectionNo: number): Pattern[] {
+  return BASE_PATTERNS.map((p, i) => ({ ...p, egg: EGG_OVERRIDES[sectionNo]?.[i] ?? p.egg }));
+}
+
+/** 0 以上 1 未満の乱数を返す関数（テストでは決まった値を返すものに差し替える） */
+export type Random = () => number;
+
+/** 1レースぶんのアイテムの配置（区間番号 → その区間のアイテム。距離の順） */
+export type ItemLayout = Record<number, CourseItem[]>;
+
+/** 1レースぶんの配置をランダムに作る。給水は合計15回（5区間が2回、残りが1回） */
+export function generateItemLayout(random: Random = Math.random): ItemLayout {
+  const sections = Array.from({ length: SECTION_COUNT }, (_, i) => i + 1);
+  // 給水が2回になる区間を選ぶ（シャッフルして先頭から）
+  const shuffled = [...sections];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  const doubleWater = new Set(shuffled.slice(0, TOTAL_WATER - SECTION_COUNT));
+
+  const layout: ItemLayout = {};
+  for (const no of sections) {
+    const patterns = patternsOf(no);
+    const p = patterns[Math.min(patterns.length - 1, Math.floor(random() * patterns.length))];
+    const items: CourseItem[] = [{ km: CHEER_KM[no], kind: "cheer" }, { km: p.water[0], kind: "water" }];
+    if (doubleWater.has(no)) items.push({ km: p.water[1], kind: "water" });
+    if (EGG_SECTIONS.includes(no)) items.push({ km: p.egg, kind: "egg" });
+    layout[no] = items.sort((a, b) => a.km - b.km);
+  }
+  return layout;
 }
 
 /** 7区：日差しが強い区間（ここの給水はポイントが sunnyWaterMultiplier 倍）。気温の変化がいちばん大きい区間 */
@@ -75,9 +119,31 @@ export function itemPoints(kind: ItemKind, grade: RelayGrade, score: ScoreConfig
   return sunny && kind === "water" ? Math.round(base * score.sunnyWaterMultiplier) : base;
 }
 
+/**
+ * 種類ごとの判定の幅とゲージを出す範囲（最高速のときのミリ秒 = 画面のピクセル）。
+ *   gauge   目印のこれだけ手前からゲージを出し、エンターを受け付ける
+ *   perfect / good  判定の幅
+ * 応援はゲージが長く出て幅も広い。黒たまごは GOOD がなく、ゲージも PERFECT の幅の中だけ（一瞬）出る
+ */
+export function itemWindows(kind: ItemKind, score: ScoreConfig): { gauge: number; perfect: number; good: number } {
+  if (kind === "cheer") {
+    const good = Math.max(score.cheerPerfectMs, score.cheerGoodMs);
+    return { gauge: Math.max(good, score.cheerGaugeMs), perfect: score.cheerPerfectMs, good };
+  }
+  if (kind === "water") {
+    const good = Math.max(score.waterPerfectMs, score.waterGoodMs);
+    return { gauge: Math.max(good, score.waterGaugeMs), perfect: score.waterPerfectMs, good };
+  }
+  return { gauge: score.eggPerfectMs, perfect: score.eggPerfectMs, good: score.eggPerfectMs };
+}
+
 /** ずれ（最高速のときのミリ秒 = 画面のピクセル）から判定する */
-export function judgeItem(offset: number, score: ScoreConfig): RelayGrade {
-  return judgeRelay(offset, { ...score, relayPerfectMs: score.itemPerfectMs, relayGoodMs: score.itemGoodMs });
+export function judgeItem(kind: ItemKind, offset: number, score: ScoreConfig): RelayGrade {
+  const { perfect, good } = itemWindows(kind, score);
+  const d = Math.abs(offset);
+  if (d <= perfect) return "PERFECT";
+  if (d <= good) return "GOOD";
+  return "MISS";
 }
 
 export interface ItemTarget {
@@ -104,22 +170,23 @@ export class ItemTracker {
   private readonly score: ScoreConfig;
   private readonly sectionNo: number;
 
-  constructor(sectionNo: number, score: ScoreConfig) {
-    this.items = itemsOf(sectionNo);
+  constructor(sectionNo: number, items: readonly CourseItem[], score: ScoreConfig) {
+    this.items = items;
     this.score = score;
     this.sectionNo = sectionNo;
   }
 
   /**
-   * エンターで狙えるアイテム。目印の手前 gaugePx 以内から、越えて GOOD の範囲を過ぎるまで。
+   * エンターで狙えるアイテム。目印の手前のゲージの範囲（種類ごと）に入ってから、越えて GOOD の範囲を過ぎるまで。
    * 複数あれば一番手前（まだ判定していないもの）
    */
-  target(km: number, pxPerKm: number, gaugePx: number): ItemTarget | null {
+  target(km: number, pxPerKm: number): ItemTarget | null {
     for (let i = 0; i < this.items.length; i++) {
       if (this.results.has(i)) continue;
       const offsetPx = (this.items[i].km - km) * pxPerKm;
-      if (offsetPx < -this.score.itemGoodMs) continue;
-      if (offsetPx > gaugePx) return null;
+      const w = itemWindows(this.items[i].kind, this.score);
+      if (offsetPx < -w.good) continue;
+      if (offsetPx > w.gauge) return null;
       return { index: i, item: this.items[i], offsetPx };
     }
     return null;
@@ -127,7 +194,7 @@ export class ItemTracker {
 
   /** エンターを押した：判定して結果を返す */
   press(target: ItemTarget): ItemResult {
-    return this.record(target.index, judgeItem(target.offsetPx, this.score));
+    return this.record(target.index, judgeItem(target.item.kind, target.offsetPx, this.score));
   }
 
   /** 押さないまま GOOD の範囲を過ぎたアイテムを取り損ねにする */
@@ -135,7 +202,7 @@ export class ItemTracker {
     const missed: ItemResult[] = [];
     this.items.forEach((item, i) => {
       if (this.results.has(i)) return;
-      if ((item.km - km) * pxPerKm < -this.score.itemGoodMs) missed.push(this.record(i, "MISS"));
+      if ((item.km - km) * pxPerKm < -itemWindows(item.kind, this.score).good) missed.push(this.record(i, "MISS"));
     });
     return missed;
   }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { SECTIONS, type RunConfig, type ScoreConfig, type SlopeConfig } from "./config";
-import { isSunny, isSunnyWater, itemPoints, itemsOf, ItemTracker } from "./items";
+import { generateItemLayout, isSunny, isSunnyWater, itemPoints, ItemTracker } from "./items";
 import { Runner } from "./runner";
 import { inSpurt, LastSpurt, spurtZoneOf } from "./spurt";
 
@@ -17,8 +17,13 @@ const run: RunConfig = {
   spurtMaxSpeed: 1.5,
 };
 const score = {
-  itemPerfectMs: 80,
-  itemGoodMs: 200,
+  cheerGaugeMs: 600,
+  cheerPerfectMs: 150,
+  cheerGoodMs: 260,
+  waterGaugeMs: 400,
+  waterPerfectMs: 100,
+  waterGoodMs: 230,
+  eggPerfectMs: 80,
   itemGoodRatio: 0.5,
   waterPoints: 150,
   cheerPoints: 100,
@@ -39,7 +44,7 @@ describe("7区 日差し給水", () => {
     expect(isSunny(7, 12)).toBe(true);
     expect(isSunny(7, 3)).toBe(false);
     expect(isSunny(1, 12)).toBe(false);
-    expect(itemsOf(7).filter((i) => isSunnyWater(7, i)).length).toBeGreaterThan(0);
+    expect(generateItemLayout()[7].filter((i) => isSunnyWater(7, i)).length).toBeGreaterThan(0);
   });
 
   it("日差し給水は倍、応援・黒たまごや GOOD・取り損ねにも正しく効く", () => {
@@ -50,18 +55,20 @@ describe("7区 日差し給水", () => {
   });
 
   it("7区の給水を PERFECT で取ると倍、日差しの外の給水は普通", () => {
-    const t = new ItemTracker(7, score);
-    const sunny = t.press(t.target(9.98, 1000, 400)!); // 10km の給水（日差しの中）
+    const water = [{ km: 10, kind: "water" as const }];
+    const t = new ItemTracker(7, water, score);
+    const sunny = t.press(t.target(9.98, 1000)!); // 10km の給水（日差しの中）
     expect(sunny).toMatchObject({ sunny: true, points: 300 });
-    const plain = new ItemTracker(1, score).press(new ItemTracker(1, score).target(9.98, 1000, 400)!);
-    expect(plain).toMatchObject({ sunny: false, points: 150 });
+    const t1 = new ItemTracker(1, water, score);
+    expect(t1.press(t1.target(9.98, 1000)!)).toMatchObject({ sunny: false, points: 150 });
   });
 });
 
 describe("10区 ラストスパート", () => {
-  it("日本橋（20km）からゴールまで", () => {
-    expect(spurtZoneOf(10)).toMatchObject({ fromKm: 20, toKm: 23, landmark: "日本橋" });
-    expect(inSpurt(10, 19.9)).toBe(false);
+  it("10区のラスト約60%（9.2km地点）からゴールまで", () => {
+    expect(spurtZoneOf(10)).toEqual({ fromKm: 9.2, toKm: 23 });
+    expect(inSpurt(10, 9.1)).toBe(false);
+    expect(inSpurt(10, 9.2)).toBe(true);
     expect(inSpurt(10, 21)).toBe(true);
     expect(spurtZoneOf(9)).toBeNull();
   });
@@ -100,7 +107,7 @@ describe("10区 ラストスパート", () => {
   });
 
   it("ラストスパートの手前では、同じ連打で転ぶ", () => {
-    const before = tapRunner(10, 150);
+    const before = tapRunner(3, 150);
     expect(before.fallCount).toBeGreaterThan(0);
   });
 });
