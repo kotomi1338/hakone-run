@@ -44,11 +44,11 @@ export function devSettingsPlugin(): Plugin {
   };
 }
 
-/** { course: {数値...}, run: {数値...}, score: {数値...} } の形かどうか */
+/** { course, run, score, slope } がどれも {名前: 数値} の形かどうか */
 function isSettings(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
-  const { course, run, score } = value as Record<string, unknown>;
-  return [course, run, score].every(
+  const { course, run, score, slope } = value as Record<string, unknown>;
+  return [course, run, score, slope].every(
     (group) =>
       typeof group === "object" &&
       group !== null &&

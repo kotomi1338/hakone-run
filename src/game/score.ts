@@ -7,7 +7,7 @@
 // 6区以降の区間はこれらの合計に倍率（1.2倍）をかける。
 // 10区間すべて襷をつないでゴールすると、全区間ボーナスを加える（倍率はかけない）。
 
-import type { CourseConfig, RunConfig, ScoreConfig, SectionConfig } from "./config";
+import type { RunConfig, ScoreConfig, SectionConfig } from "./config";
 
 export type RelayGrade = "PERFECT" | "GOOD" | "MISS";
 
@@ -26,11 +26,13 @@ export function emptySectionScore(): SectionScore {
   return { time: 0, rhythm: 0, relay: 0, relayGrade: null, maxCombo: 0 };
 }
 
-/** タイムポイント：最高速で走り切ったタイムを満点として、かかった時間に反比例して減る */
-export function timePoints(section: SectionConfig, timeMs: number, course: CourseConfig, score: ScoreConfig): number {
+/**
+ * タイムポイント：最高速で走り切ったタイム（idealMs、坂の影響も含む）を満点として、
+ * かかった時間に反比例して減る
+ */
+export function timePoints(section: SectionConfig, timeMs: number, idealMs: number, score: ScoreConfig): number {
   if (timeMs <= 0) return 0;
   const fullMarks = score.timePointsPerKm * section.distanceKm;
-  const idealMs = section.distanceKm * course.secondsPerKm * 1000;
   return Math.round(fullMarks * Math.min(1, idealMs / timeMs));
 }
 

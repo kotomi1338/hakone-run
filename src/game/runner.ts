@@ -1,6 +1,7 @@
 // 連打 → 速度 → 距離 の計算。画面（Phaser）に依存しない純粋なロジック。
 
-import { COURSE_CONFIG, type CourseConfig, type RunConfig, type SectionConfig } from "./config";
+import { COURSE_CONFIG, SLOPE_CONFIG, type CourseConfig, type RunConfig, type SectionConfig, type SlopeConfig } from "./config";
+import { fallIntervalExtraMs, gradeAt, slopeFactor } from "./terrain";
 
 /** 直近 windowMs の連打を記録して、1秒あたりの連打回数を出す */
 export class TapMeter {
@@ -51,7 +52,7 @@ export type TapResult = "accepted" | "fell" | "rejected" | "ignored";
 export class Runner {
   /** 走った距離（km） */
   distanceKm = 0;
-  /** 最高速度を 1 とした今の速度 */
+  /** 連打の勢い（最高速度を 1 とする）。坂の影響をかける前 */
   speedRatio = 0;
   /** 受け付けた連打の合計 */
   tapCount = 0;
@@ -63,6 +64,7 @@ export class Runner {
   private readonly config: RunConfig;
   private section: SectionConfig;
   private readonly course: CourseConfig;
+  private readonly slope: SlopeConfig;
   private readonly meter: TapMeter;
   /** 最後に受け付けた連打の時刻（転んだ後や開始前は null） */
   lastTapAt: number | null = null;
@@ -71,10 +73,16 @@ export class Runner {
 
   private fallenUntil = -Infinity;
 
-  constructor(config: RunConfig, section: SectionConfig, course: CourseConfig = COURSE_CONFIG) {
+  constructor(
+    config: RunConfig,
+    section: SectionConfig,
+    course: CourseConfig = COURSE_CONFIG,
+    slope: SlopeConfig = SLOPE_CONFIG,
+  ) {
     this.config = config;
     this.section = section;
     this.course = course;
+    this.slope = slope;
     this.meter = new TapMeter(config);
   }
 
@@ -84,6 +92,21 @@ export class Runner {
 
   get finished(): boolean {
     return this.distanceKm >= this.section.distanceKm;
+  }
+
+  /** 今いる地点の勾配（%）。プラスが上り */
+  get grade(): number {
+    return gradeAt(this.section.no, this.distanceKm);
+  }
+
+  /** 実際の速度（平地の最高速度を 1 とする）。勢い × 坂の影響 */
+  get actualSpeed(): number {
+    return this.speedRatio * slopeFactor(this.grade, this.slope);
+  }
+
+  /** 今いる地点で「押しすぎ」になる間隔（ミリ秒）。下り坂では長くなる */
+  get fallIntervalMs(): number {
+    return this.config.fallIntervalMs + fallIntervalExtraMs(this.grade, this.slope);
   }
 
   /** 最高速度で走ったときの 1秒あたりの距離（km） */
@@ -103,8 +126,8 @@ export class Runner {
     }
     this.tapCount++;
 
-    // 押しすぎ判定：前回から fallIntervalMs 未満で押すのが fallStreak 回続いたら転ぶ
-    const tooFast = this.lastTapAt !== null && now - this.lastTapAt < this.config.fallIntervalMs;
+    // 押しすぎ判定：前回から fallIntervalMs（下り坂では長くなる）未満で押すのが fallStreak 回続いたら転ぶ
+    const tooFast = this.lastTapAt !== null && now - this.lastTapAt < this.fallIntervalMs;
     this.fastStreak = tooFast ? this.fastStreak + 1 : 0;
     this.lastTapAt = now;
     if (this.fastStreak >= this.config.fallStreak) {
@@ -146,7 +169,7 @@ export class Runner {
 
     this.distanceKm = Math.min(
       this.section.distanceKm,
-      this.distanceKm + this.speedRatio * this.maxKmPerSec * (dtMs / 1000),
+      this.distanceKm + this.actualSpeed * this.maxKmPerSec * (dtMs / 1000),
     );
   }
 

@@ -2,12 +2,14 @@
 // 調整できる値の初期値は settings.json にある。管理画面の「現在の設定で保存」でこのファイルが更新される。
 
 import settings from "./settings.json";
+import { slopeFactor, terrainOf } from "./terrain";
 
 /** 管理画面で調整・保存する設定一式（settings.json の形） */
 export interface Settings {
   course: CourseConfig;
   run: RunConfig;
   score: ScoreConfig;
+  slope: SlopeConfig;
 }
 
 export interface SectionConfig {
@@ -26,9 +28,34 @@ export interface CourseConfig {
 
 export const COURSE_CONFIG: CourseConfig = { ...settings.course };
 
-/** 最高速度で走ったときに区間を走り切る秒数 */
-export function sectionSeconds(section: SectionConfig, course: CourseConfig = COURSE_CONFIG): number {
-  return section.distanceKm * course.secondsPerKm;
+export interface SlopeConfig {
+  /** 上り坂：勾配 1% ごとに最高速度がこの割合だけ落ちる（0.05 なら 6% の坂で 0.7 倍） */
+  uphillSlowdownPerGrade: number;
+  /** 下り坂：勾配 1% ごとに最高速度がこの割合だけ上がる */
+  downhillBoostPerGrade: number;
+  /** 下り坂で上がる速度の上限（0.4 なら 1.4 倍まで） */
+  maxDownhillBoost: number;
+  /** 下り坂：勾配 1% ごとに「押しすぎ」の間隔がこのミリ秒だけ長くなる（転びやすくなる） */
+  downhillFallIntervalMsPerGrade: number;
+}
+
+export const SLOPE_CONFIG: SlopeConfig = { ...settings.slope };
+
+/** 最高速度で走ったときに区間を走り切る秒数（坂の影響も含む） */
+export function sectionSeconds(
+  section: SectionConfig,
+  course: CourseConfig = COURSE_CONFIG,
+  slope: SlopeConfig = SLOPE_CONFIG,
+): number {
+  // 坂のない所は最高速、坂の区間は速度が slopeFactor 倍になる
+  let seconds = 0;
+  let flatKm = section.distanceKm;
+  for (const seg of terrainOf(section.no)) {
+    const km = seg.toKm - seg.fromKm;
+    flatKm -= km;
+    seconds += (km * course.secondsPerKm) / slopeFactor(seg.grade, slope);
+  }
+  return seconds + flatKm * course.secondsPerKm;
 }
 
 export interface RunConfig {
@@ -97,7 +124,12 @@ export const SCORE_CONFIG: ScoreConfig = { ...settings.score };
 
 /** 今の設定値のコピー */
 export function snapshotSettings(): Settings {
-  return { course: { ...COURSE_CONFIG }, run: { ...RUN_CONFIG }, score: { ...SCORE_CONFIG } };
+  return {
+    course: { ...COURSE_CONFIG },
+    run: { ...RUN_CONFIG },
+    score: { ...SCORE_CONFIG },
+    slope: { ...SLOPE_CONFIG },
+  };
 }
 
 /** 設定値を上書きする。知らないキーや数値でない値は無視する */
@@ -107,6 +139,7 @@ export function applySettings(input: unknown): void {
   assignNumbers(COURSE_CONFIG, src.course);
   assignNumbers(RUN_CONFIG, src.run);
   assignNumbers(SCORE_CONFIG, src.score);
+  assignNumbers(SLOPE_CONFIG, src.slope);
 }
 
 function assignNumbers<T extends object>(target: T, source: unknown): void {

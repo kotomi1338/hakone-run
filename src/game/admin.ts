@@ -13,6 +13,7 @@ import {
   RUN_CONFIG,
   SCORE_CONFIG,
   SECTIONS,
+  SLOPE_CONFIG,
   sectionSeconds,
   snapshotSettings,
 } from "./config";
@@ -105,6 +106,13 @@ export function setupAdmin(game: Phaser.Game): () => void {
   run.add(RUN_CONFIG, "fallDurationMs", 0, 5000, 100).name("転倒時間(ms)");
   run.add(RUN_CONFIG, "maxRate", 1, 30, 1).name("連打上限(回/秒)");
   run.close();
+
+  const slope = gui.addFolder("坂の効き具合");
+  slope.add(SLOPE_CONFIG, "uphillSlowdownPerGrade", 0, 0.15, 0.005).name("上り 1%で遅くなる割合").onChange(updatePreview);
+  slope.add(SLOPE_CONFIG, "downhillBoostPerGrade", 0, 0.15, 0.005).name("下り 1%で速くなる割合").onChange(updatePreview);
+  slope.add(SLOPE_CONFIG, "maxDownhillBoost", 0, 1, 0.05).name("下りで速くなる上限").onChange(updatePreview);
+  slope.add(SLOPE_CONFIG, "downhillFallIntervalMsPerGrade", 0, 100, 5).name("下り 1%で押しすぎ間隔+(ms)");
+  slope.close();
 
   const scoring = gui.addFolder("ポイントの調整");
   scoring.add(SCORE_CONFIG, "timePointsPerKm", 0, 200, 1).name("タイム満点(pt/km)");

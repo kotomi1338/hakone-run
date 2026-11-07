@@ -43,21 +43,19 @@ const score: ScoreConfig = {
 const section1 = SECTIONS[0]; // 21.3km
 
 describe("timePoints", () => {
+  const ideal = 21.3 * 1000; // 最高速で走り切ったときのタイム
+
   it("最高速で走り切ったタイムなら満点", () => {
-    expect(timePoints(section1, 21.3 * 1000, course, score)).toBe(1065); // 50 × 21.3
+    expect(timePoints(section1, ideal, ideal, score)).toBe(1065); // 50 × 21.3
   });
 
   it("2倍の時間がかかったら半分", () => {
-    expect(timePoints(section1, 21.3 * 2000, course, score)).toBe(533); // 532.5 を四捨五入
+    expect(timePoints(section1, ideal * 2, ideal, score)).toBe(533); // 532.5 を四捨五入
   });
 
   it("満点を超えない・タイム 0 以下は 0", () => {
-    expect(timePoints(section1, 1000, course, score)).toBe(1065);
-    expect(timePoints(section1, 0, course, score)).toBe(0);
-  });
-
-  it("縮尺を変えても、最高速なら同じポイント", () => {
-    expect(timePoints(section1, 21.3 * 250, { secondsPerKm: 0.25 }, score)).toBe(1065);
+    expect(timePoints(section1, 1000, ideal, score)).toBe(1065);
+    expect(timePoints(section1, 0, ideal, score)).toBe(0);
   });
 });
 

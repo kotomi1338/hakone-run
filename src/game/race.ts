@@ -1,6 +1,16 @@
 // レース全体の進み具合（どの区間を走っているか、区間タイム、ポイント）。画面（Phaser）に依存しない。
 
-import { COURSE_CONFIG, SCORE_CONFIG, SECTIONS, type CourseConfig, type ScoreConfig, type SectionConfig } from "./config";
+import {
+  COURSE_CONFIG,
+  SCORE_CONFIG,
+  SECTIONS,
+  sectionSeconds,
+  SLOPE_CONFIG,
+  type CourseConfig,
+  type ScoreConfig,
+  type SectionConfig,
+  type SlopeConfig,
+} from "./config";
 import {
   emptySectionScore,
   relayPoints,
@@ -39,11 +49,18 @@ export class Race {
 
   private readonly course: CourseConfig;
   private readonly score: ScoreConfig;
+  private readonly slope: SlopeConfig;
 
-  constructor(startIndex = 0, course: CourseConfig = COURSE_CONFIG, score: ScoreConfig = SCORE_CONFIG) {
+  constructor(
+    startIndex = 0,
+    course: CourseConfig = COURSE_CONFIG,
+    score: ScoreConfig = SCORE_CONFIG,
+    slope: SlopeConfig = SLOPE_CONFIG,
+  ) {
     this.sectionIndex = Math.min(Math.max(0, startIndex), SECTIONS.length - 1);
     this.course = course;
     this.score = score;
+    this.slope = slope;
   }
 
   /** 今走っている区間のポイント（走り始めたら作られる） */
@@ -83,7 +100,8 @@ export class Race {
   /** 今の区間のタイムを記録し、タイムポイントをつける */
   recordSection(timeMs: number): void {
     this.sectionTimesMs[this.sectionIndex] = timeMs;
-    this.currentScore.time = timePoints(this.section, timeMs, this.course, this.score);
+    const idealMs = sectionSeconds(this.section, this.course, this.slope) * 1000;
+    this.currentScore.time = timePoints(this.section, timeMs, idealMs, this.score);
   }
 
   /** 今の区間にリズムポイントを足す */

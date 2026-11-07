@@ -4,6 +4,7 @@ import { bindGameKeys, formatTime } from "./input";
 import { FONT, GAME_HEIGHT, GAME_WIDTH, TEXT_COLOR } from "./layout";
 import { Race, sectionsOfStage, STAGE_NAMES } from "./race";
 import { Runner } from "./runner";
+import { elevationAt, segmentAt } from "./terrain";
 import { judgeRelay, RhythmCombo, sectionMultiplier, type RelayGrade } from "./score";
 
 const GROUND_Y = 400;
@@ -448,7 +449,7 @@ export class RunScene extends Phaser.Scene {
     // 総合タイム：記録済みの区間 + 今の区間（着いた後は記録済みに含まれる）
     const total = this.race.totalMs() + (this.state === "running" ? elapsed : 0);
     const remain = Math.max(0, this.section.distanceKm - this.runner.distanceKm);
-    const kmh = this.runner.speedRatio * DISPLAY_TOP_KMH;
+    const kmh = this.runner.actualSpeed * DISPLAY_TOP_KMH;
     const lastTapAt = this.runner.lastTapAt;
     const sinceLast = this.state === "running" && lastTapAt !== null ? now - lastTapAt : null;
     const fallen = this.runner.isFallen(now);
@@ -457,6 +458,7 @@ export class RunScene extends Phaser.Scene {
       `区間タイム  ${formatTime(elapsed)}    総合  ${formatTime(total)}`,
       `残り  ${remain.toFixed(2)} km`,
       `速度  ${kmh.toFixed(1)} km/h${fallen ? "   転倒！" : ""}`,
+      this.slopeLabel(),
       `前回から  ${sinceLast === null ? "-" : `${(sinceLast / 1000).toFixed(2)} 秒`}${
         this.runner.fastStreak > 0 && !fallen ? "   押しすぎ注意！" : ""
       }`,
@@ -474,27 +476,65 @@ export class RunScene extends Phaser.Scene {
     );
     this.drawRelayGauge();
 
-    // 進捗バー（進む向きに合わせて伸ばす）
+    // 高低図（進捗バーを兼ねる）
     const p = this.progressBar;
     const x = GAME_WIDTH - 324;
-    const y = 24;
     const w = 300;
-    const filled = Math.max(14, (w * this.runner.distanceKm) / this.section.distanceKm);
     p.clear();
-    p.fillStyle(0xffffff, 0.8).fillRoundedRect(x, y, w, 14, 7);
-    p.fillStyle(0x1e5bd8).fillRoundedRect(this.dir === 1 ? x : x + w - filled, y, filled, 14, 7);
+    this.drawProfile(p, x, 8, w, 34);
 
     // 押す間隔ゲージ：前回の連打からの経過時間。赤（早すぎ）を抜けて緑になってから押す
+    // 下り坂では赤（押しすぎ）の範囲が広がる
     const gy = 52;
-    const gaugeMaxMs = Math.max(RUN_CONFIG.fallIntervalMs * 2, RUN_CONFIG.justIntervalMs * 1.5);
+    const fallMs = this.runner.fallIntervalMs;
+    const gaugeMaxMs = Math.max(RUN_CONFIG.fallIntervalMs * 2, RUN_CONFIG.justIntervalMs * 1.5, fallMs * 1.3);
     const toX = (ms: number) => x + (w * Math.min(ms, gaugeMaxMs)) / gaugeMaxMs;
-    const okX = toX(RUN_CONFIG.fallIntervalMs);
+    const okX = toX(fallMs);
     p.fillStyle(0xf08a8a).fillRect(x, gy, okX - x, 12);
     p.fillStyle(0x7fd67f).fillRect(okX, gy, x + w - okX, 12);
     // ジャストタイミングの目印
     p.fillStyle(0xf2c400).fillRect(toX(RUN_CONFIG.justIntervalMs) - 1, gy - 2, 3, 16);
     if (sinceLast !== null) {
-      p.fillStyle(sinceLast < RUN_CONFIG.fallIntervalMs ? 0xd84b1e : 0x10243e).fillRect(toX(sinceLast) - 2, gy - 4, 4, 20);
+      p.fillStyle(sinceLast < fallMs ? 0xd84b1e : 0x10243e).fillRect(toX(sinceLast) - 2, gy - 4, 4, 20);
     }
+  }
+
+  /** 今いる地点の坂の表示（例：「坂  上り 3.0%（権太坂）」） */
+  private slopeLabel(): string {
+    const seg = segmentAt(this.section.no, this.runner.distanceKm);
+    if (!seg) return "坂  平坦";
+    const kind = seg.grade > 0 ? "上り" : "下り";
+    const name = seg.name ? `（${seg.name}）` : "";
+    const warn = seg.grade < 0 ? "  転びやすい！" : "";
+    return `坂  ${kind} ${Math.abs(seg.grade).toFixed(1)}%${name}${warn}`;
+  }
+
+  /** 区間の高低図。走った所を濃く塗り、今の位置に印をつける。復路は左右反転 */
+  private drawProfile(g: Phaser.GameObjects.Graphics, x: number, y: number, w: number, h: number): void {
+    const no = this.section.no;
+    const dist = this.section.distanceKm;
+    const steps = 120;
+    const elev = Array.from({ length: steps + 1 }, (_, i) => elevationAt(no, (dist * i) / steps));
+    const min = Math.min(...elev);
+    // 平坦な区間の小さな起伏が大げさに見えないよう、縦の幅は最低 100m ぶんにする
+    const span = Math.max(100, Math.max(...elev) - min);
+    const toX = (km: number) => (this.dir === 1 ? x + (w * km) / dist : x + w - (w * km) / dist);
+    const toY = (m: number) => y + h - 3 - ((m - min) / span) * (h - 6);
+
+    g.fillStyle(0xffffff, 0.8).fillRoundedRect(x - 4, y - 2, w + 8, h + 4, 6);
+    const ran = this.runner.distanceKm;
+    const area = (fromKm: number, toKm: number, color: number) => {
+      const pts = [new Phaser.Math.Vector2(toX(fromKm), y + h)];
+      for (let i = 0; i <= steps; i++) {
+        const km = (dist * i) / steps;
+        if (km < fromKm || km > toKm) continue;
+        pts.push(new Phaser.Math.Vector2(toX(km), toY(elev[i])));
+      }
+      pts.push(new Phaser.Math.Vector2(toX(toKm), toY(elevationAt(no, toKm))), new Phaser.Math.Vector2(toX(toKm), y + h));
+      g.fillStyle(color).fillPoints(pts, true);
+    };
+    area(0, dist, 0x9fb7cf);
+    if (ran > 0) area(0, ran, 0x1e5bd8);
+    g.fillStyle(0xc0392b).fillCircle(toX(ran), toY(elevationAt(no, ran)), 5);
   }
 }
