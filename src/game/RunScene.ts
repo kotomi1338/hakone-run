@@ -1,9 +1,10 @@
 import Phaser from "phaser";
-import { COURSE_CONFIG, RUN_CONFIG, type SectionConfig } from "./config";
+import { COURSE_CONFIG, RUN_CONFIG, SCORE_CONFIG, type SectionConfig } from "./config";
 import { bindGameKeys, formatTime } from "./input";
 import { FONT, GAME_HEIGHT, GAME_WIDTH, TEXT_COLOR } from "./layout";
 import { Race, sectionsOfStage, STAGE_NAMES } from "./race";
 import { Runner } from "./runner";
+import { judgeRelay, RhythmCombo, sectionMultiplier, type RelayGrade } from "./score";
 
 const GROUND_Y = 400;
 /** 進む方向の反対側の端からランナーまでの距離（ピクセル） */
@@ -19,6 +20,9 @@ const DISPLAY_TOP_KMH = 21;
 const GOAL_PAUSE_MS = 1500;
 /** 襷リレーの表示を出しておく時間（ミリ秒）。走りは止まらない */
 const RELAY_MESSAGE_MS = 1500;
+/** 中継線までこのピクセル以内に近づいたら襷ゲージを出し、エンターを受け付ける */
+const RELAY_GAUGE_PX = 400;
+const RELAY_GRADE_COLORS: Record<RelayGrade, string> = { PERFECT: "#f2a900", GOOD: "#2e9e4f", MISS: "#7a7a7a" };
 
 type State = "ready" | "running" | "arrived";
 
@@ -47,6 +51,12 @@ export class RunScene extends Phaser.Scene {
   private postLabels: Phaser.GameObjects.Text[] = [];
   private sectionTitle!: Phaser.GameObjects.Text;
   private relayMessageTimer?: Phaser.Time.TimerEvent;
+  private combo!: RhythmCombo;
+  private pointsText!: Phaser.GameObjects.Text;
+  private comboText!: Phaser.GameObjects.Text;
+  private relayGauge!: Phaser.GameObjects.Graphics;
+  private relayGaugeText!: Phaser.GameObjects.Text;
+  private popText!: Phaser.GameObjects.Text;
   private runnerRect!: Phaser.GameObjects.Rectangle;
   private hud!: Phaser.GameObjects.Text;
   private progressBar!: Phaser.GameObjects.Graphics;
@@ -65,8 +75,12 @@ export class RunScene extends Phaser.Scene {
 
   create(): void {
     this.runner = new Runner(RUN_CONFIG, this.section);
+    this.combo = new RhythmCombo(RUN_CONFIG, SCORE_CONFIG);
+    // 管理画面のポイント内訳が今のレースを読めるようにする
+    this.registry.set("race", this.race);
     this.state = "ready";
     this.runPhase = 0;
+    this.ranPrev = false;
     this.dir = this.race.stage === 1 ? 1 : -1;
 
     this.cameras.main.setBackgroundColor("#bfe3ff");
@@ -114,6 +128,38 @@ export class RunScene extends Phaser.Scene {
       lineSpacing: 6,
     });
 
+    // ポイント（常に表示）
+    this.pointsText = this.add
+      .text(GAME_WIDTH - 24, 78, "", { fontFamily: FONT, fontSize: "28px", color: TEXT_COLOR, fontStyle: "bold" })
+      .setOrigin(1, 0);
+    this.comboText = this.add
+      .text(GAME_WIDTH - 24, 116, "", { fontFamily: FONT, fontSize: "18px", color: TEXT_COLOR, lineSpacing: 4, align: "right" })
+      .setOrigin(1, 0);
+
+    this.relayGauge = this.add.graphics();
+    this.relayGaugeText = this.add
+      .text(GAME_WIDTH / 2, 312, "Enterで襷を渡す！", {
+        fontFamily: FONT,
+        fontSize: "20px",
+        color: "#c0392b",
+        fontStyle: "bold",
+        stroke: "#ffffff",
+        strokeThickness: 4,
+      })
+      .setOrigin(0.5, 0)
+      .setVisible(false);
+    this.popText = this.add
+      .text(GAME_WIDTH / 2, 150, "", {
+        fontFamily: FONT,
+        fontSize: "34px",
+        color: "#f2a900",
+        fontStyle: "bold",
+        stroke: "#ffffff",
+        strokeThickness: 6,
+      })
+      .setOrigin(0.5)
+      .setVisible(false);
+
     this.centerText = this.add
       .text(GAME_WIDTH / 2, 200, "スペースキーを連打してスタート！", {
         fontFamily: FONT,
@@ -137,7 +183,10 @@ export class RunScene extends Phaser.Scene {
     bindGameKeys(this, {
       onSpace: (now) => {
         if (this.state === "ready") this.start(now);
-        if (this.state === "running") this.runner.tap(now);
+        if (this.state === "running") this.onTap(now);
+      },
+      onEnter: () => {
+        if (this.state === "running") this.onRelayKey();
       },
     });
 
@@ -157,6 +206,70 @@ export class RunScene extends Phaser.Scene {
     return this.dir === 1 ? x : GAME_WIDTH - x - w;
   }
 
+  private onTap(now: number): void {
+    const result = this.runner.tap(now);
+    if (result === "accepted") {
+      const points = this.combo.tap(now);
+      if (points > 0) this.race.addRhythm(points, this.combo.combo);
+    } else if (result === "fell") {
+      this.combo.break();
+    }
+  }
+
+  /** 画面上で 1km を何ピクセルで描くか（管理画面で縮尺を変えるとその場で変わる） */
+  private get pxPerKm(): number {
+    return MAX_SCROLL_PX_PER_SEC * COURSE_CONFIG.secondsPerKm;
+  }
+
+  /**
+   * 襷の判定を待っている中継線とのずれ（ピクセル。手前ならプラス、越えた後はマイナス）。
+   * 判定するものがなければ null
+   */
+  private relayOffset(): { index: number; px: number } | null {
+    const i = this.race.sectionIndex;
+    // これから越える中継線（ステージ最後の区間はゴールなので襷なし）
+    if (!this.race.isStageLastSection && this.race.sectionScores[i]?.relayGrade == null) {
+      const px = (this.section.distanceKm - this.runner.distanceKm) * this.pxPerKm;
+      if (px <= RELAY_GAUGE_PX) return { index: i, px };
+    }
+    // 越えたばかりでまだ押していない中継線（前の区間をこのシーンで走ったときだけ）
+    const prev = this.race.sectionScores[i - 1];
+    if (i > 0 && this.race.sectionTimesMs[i - 1] !== null && prev && prev.relayGrade === null && this.ranPrev) {
+      return { index: i - 1, px: -this.runner.distanceKm * this.pxPerKm };
+    }
+    return null;
+  }
+
+  /** このシーンで前の区間から走ってきたか（区間ジャンプ直後は前の中継線の判定をしない） */
+  private ranPrev = false;
+
+  private onRelayKey(): void {
+    const target = this.relayOffset();
+    if (!target) return; // 中継所の近く以外でのエンターは何もしない
+    this.judge(target.index, judgeRelay(target.px, SCORE_CONFIG));
+  }
+
+  private judge(index: number, grade: RelayGrade): void {
+    this.race.setRelay(index, grade);
+    const points = this.race.sectionScores[index]?.relay ?? 0;
+    const mult = sectionMultiplier(index + 1, SCORE_CONFIG);
+    this.showPop(grade === "MISS" ? "MISS…" : `${grade}!  +${Math.round(points * mult)}`, RELAY_GRADE_COLORS[grade]);
+  }
+
+  private showPop(text: string, color: string): void {
+    this.tweens.killTweensOf(this.popText);
+    this.popText.setText(text).setColor(color).setVisible(true).setAlpha(1).setY(150).setScale(1.3);
+    this.tweens.add({ targets: this.popText, scale: 1, duration: 150, ease: "Back.Out" });
+    this.tweens.add({
+      targets: this.popText,
+      y: 120,
+      alpha: 0,
+      delay: 700,
+      duration: 500,
+      onComplete: () => this.popText.setVisible(false),
+    });
+  }
+
   private start(now: number): void {
     this.state = "running";
     this.startedAt = now;
@@ -173,6 +286,9 @@ export class RunScene extends Phaser.Scene {
         if (this.race.isStageLastSection) this.arrive(now);
         else this.relay(now);
       }
+      // 中継線を越えてから押さないまま GOOD の範囲を過ぎたら MISS
+      const target = this.relayOffset();
+      if (target && target.px < -SCORE_CONFIG.relayGoodMs) this.judge(target.index, "MISS");
     }
 
     const fallen = this.runner.isFallen(now);
@@ -202,6 +318,7 @@ export class RunScene extends Phaser.Scene {
     this.section = this.race.section;
     this.runner.handOver(this.section);
     this.startedAt = now;
+    this.ranPrev = true;
     this.updateSectionTitle();
 
     this.centerText.setText(`襷リレー！  ${from.no}区 → ${this.section.no}区`).setVisible(true);
@@ -302,6 +419,29 @@ export class RunScene extends Phaser.Scene {
     for (let i = postIdx; i < this.postLabels.length; i++) this.postLabels[i].setVisible(false);
   }
 
+  /** 襷ゲージ：中央の線が中継線。マーカーが線に重なった瞬間にエンター */
+  private drawRelayGauge(): void {
+    const g = this.relayGauge;
+    g.clear();
+    const target = this.state === "running" ? this.relayOffset() : null;
+    this.relayGaugeText.setVisible(target !== null);
+    if (!target) return;
+
+    const cx = GAME_WIDTH / 2;
+    const y = 290;
+    const half = 200;
+    const scale = half / RELAY_GAUGE_PX;
+    g.fillStyle(0xffffff, 0.85).fillRect(cx - half, y, half * 2, 16);
+    const good = SCORE_CONFIG.relayGoodMs * scale;
+    const perfect = SCORE_CONFIG.relayPerfectMs * scale;
+    g.fillStyle(0x7fd67f).fillRect(cx - good, y, good * 2, 16);
+    g.fillStyle(0xf2c400).fillRect(cx - perfect, y, perfect * 2, 16);
+    g.fillStyle(0xc0392b).fillRect(cx - 1, y - 4, 3, 24);
+    // マーカーは進む向きの後ろ側から中央へ近づく
+    const mx = cx - this.dir * Math.max(-half, Math.min(half, target.px * scale));
+    g.fillStyle(0x10243e).fillRect(mx - 3, y - 8, 6, 32);
+  }
+
   private drawHud(now: number): void {
     const elapsed =
       this.state === "ready" ? 0 : (this.state === "arrived" ? this.arrivedAt : now) - this.startedAt;
@@ -321,6 +461,18 @@ export class RunScene extends Phaser.Scene {
         this.runner.fastStreak > 0 && !fallen ? "   押しすぎ注意！" : ""
       }`,
     ]);
+
+    // ポイント
+    const points = this.race.breakdown().total;
+    this.pointsText.setText(`${points.toLocaleString()} pt`);
+    const mult = sectionMultiplier(this.section.no, SCORE_CONFIG);
+    this.comboText.setText(
+      [
+        `コンボ ${this.combo.combo}  リズム×${this.combo.multiplier.toFixed(1)}`,
+        mult !== 1 ? `${this.section.no}区はポイント×${mult}` : "",
+      ].join("\n"),
+    );
+    this.drawRelayGauge();
 
     // 進捗バー（進む向きに合わせて伸ばす）
     const p = this.progressBar;

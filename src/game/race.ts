@@ -1,6 +1,15 @@
-// レース全体の進み具合（どの区間を走っているか、区間タイム）。画面（Phaser）に依存しない。
+// レース全体の進み具合（どの区間を走っているか、区間タイム、ポイント）。画面（Phaser）に依存しない。
 
-import { SECTIONS, type SectionConfig } from "./config";
+import { COURSE_CONFIG, SCORE_CONFIG, SECTIONS, type CourseConfig, type ScoreConfig, type SectionConfig } from "./config";
+import {
+  emptySectionScore,
+  relayPoints,
+  scoreBreakdown,
+  timePoints,
+  type RelayGrade,
+  type ScoreBreakdown,
+  type SectionScore,
+} from "./score";
 
 export type Stage = 1 | 2;
 
@@ -25,9 +34,21 @@ export class Race {
   sectionIndex: number;
   /** 区間ごとのタイム（ミリ秒）。まだ走っていない・飛ばした区間は null */
   readonly sectionTimesMs: (number | null)[] = SECTIONS.map(() => null);
+  /** 区間ごとのポイント（倍率をかける前）。まだ走っていない・飛ばした区間は null */
+  readonly sectionScores: (SectionScore | null)[] = SECTIONS.map(() => null);
 
-  constructor(startIndex = 0) {
+  private readonly course: CourseConfig;
+  private readonly score: ScoreConfig;
+
+  constructor(startIndex = 0, course: CourseConfig = COURSE_CONFIG, score: ScoreConfig = SCORE_CONFIG) {
     this.sectionIndex = Math.min(Math.max(0, startIndex), SECTIONS.length - 1);
+    this.course = course;
+    this.score = score;
+  }
+
+  /** 今走っている区間のポイント（走り始めたら作られる） */
+  get currentScore(): SectionScore {
+    return (this.sectionScores[this.sectionIndex] ??= emptySectionScore());
   }
 
   get section(): SectionConfig {
@@ -59,9 +80,35 @@ export class Race {
     return this.sectionIndex === SECTIONS.length - 1 && this.sectionTimesMs[this.sectionIndex] !== null;
   }
 
-  /** 今の区間のタイムを記録する */
+  /** 今の区間のタイムを記録し、タイムポイントをつける */
   recordSection(timeMs: number): void {
     this.sectionTimesMs[this.sectionIndex] = timeMs;
+    this.currentScore.time = timePoints(this.section, timeMs, this.course, this.score);
+  }
+
+  /** 今の区間にリズムポイントを足す */
+  addRhythm(points: number, combo: number): void {
+    const s = this.currentScore;
+    s.rhythm += points;
+    s.maxCombo = Math.max(s.maxCombo, combo);
+  }
+
+  /** index 番目の区間の襷の判定を記録する（判定済みなら何もしない） */
+  setRelay(index: number, grade: RelayGrade): void {
+    const s = (this.sectionScores[index] ??= emptySectionScore());
+    if (s.relayGrade !== null) return;
+    s.relayGrade = grade;
+    s.relay = relayPoints(grade, this.score);
+  }
+
+  /** 10区間すべて走り、襷をつないだか（今は繰り上げがないので、全区間を走れば true） */
+  get allConnected(): boolean {
+    return this.isFinished && this.sectionTimesMs.every((t) => t !== null);
+  }
+
+  /** 今までのポイントの内訳（走っている途中の区間のリズムポイントも含む） */
+  breakdown(): ScoreBreakdown {
+    return scoreBreakdown(this.sectionScores, this.allConnected, this.score);
   }
 
   /** 次の区間へ進む。最後の区間なら何もしない */

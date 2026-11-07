@@ -17,7 +17,8 @@
     "dev": "vp dev",
     "build": "vp build",
     "preview": "vp preview",
-    "postinstall": "void prepare"
+    "postinstall": "void prepare",
+    "test": "vp test run"
   },
   "dependencies": {
     "hono": "^4.11.9",

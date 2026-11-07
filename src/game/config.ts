@@ -7,6 +7,7 @@ import settings from "./settings.json";
 export interface Settings {
   course: CourseConfig;
   run: RunConfig;
+  score: ScoreConfig;
 }
 
 export interface SectionConfig {
@@ -67,9 +68,36 @@ export const SECTIONS: SectionConfig[] = [
 
 export const RUN_CONFIG: RunConfig = { ...settings.run };
 
+export interface ScoreConfig {
+  /** タイムポイント：最高速で走り切ったときに 1km あたりもらえるポイント。遅いほど比例して減る */
+  timePointsPerKm: number;
+  /** リズム：ジャストタイミング（justIntervalMs）から何ミリ秒ずれてもコンボが続くか */
+  rhythmToleranceMs: number;
+  /** リズム：コンボがつながった連打 1回のポイント（倍率をかける前） */
+  rhythmPointsPerTap: number;
+  /** リズム：コンボがこの回数つながるごとに倍率が上がる */
+  comboStep: number;
+  /** リズム：倍率が 1段上がるごとに増える量 */
+  comboMultiplierStep: number;
+  /** リズム：倍率の上限 */
+  maxComboMultiplier: number;
+  /** 襷：中継線を越える瞬間とエンターのずれがこのミリ秒以内なら PERFECT */
+  relayPerfectMs: number;
+  /** 襷：このミリ秒以内なら GOOD。これより大きくずれると MISS */
+  relayGoodMs: number;
+  relayPerfectPoints: number;
+  relayGoodPoints: number;
+  /** 全区間ボーナス：10区間すべて襷をつないでゴールしたときのポイント */
+  fullRelayBonus: number;
+  /** 6区以降に獲得したポイントの倍率 */
+  secondStageMultiplier: number;
+}
+
+export const SCORE_CONFIG: ScoreConfig = { ...settings.score };
+
 /** 今の設定値のコピー */
 export function snapshotSettings(): Settings {
-  return { course: { ...COURSE_CONFIG }, run: { ...RUN_CONFIG } };
+  return { course: { ...COURSE_CONFIG }, run: { ...RUN_CONFIG }, score: { ...SCORE_CONFIG } };
 }
 
 /** 設定値を上書きする。知らないキーや数値でない値は無視する */
@@ -78,6 +106,7 @@ export function applySettings(input: unknown): void {
   const src = input as Record<string, unknown>;
   assignNumbers(COURSE_CONFIG, src.course);
   assignNumbers(RUN_CONFIG, src.run);
+  assignNumbers(SCORE_CONFIG, src.score);
 }
 
 function assignNumbers<T extends object>(target: T, source: unknown): void {

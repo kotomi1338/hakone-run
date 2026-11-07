@@ -11,6 +11,7 @@ import {
   applySettings,
   COURSE_CONFIG,
   RUN_CONFIG,
+  SCORE_CONFIG,
   SECTIONS,
   sectionSeconds,
   snapshotSettings,
@@ -105,6 +106,35 @@ export function setupAdmin(game: Phaser.Game): () => void {
   run.add(RUN_CONFIG, "maxRate", 1, 30, 1).name("連打上限(回/秒)");
   run.close();
 
+  const scoring = gui.addFolder("ポイントの調整");
+  scoring.add(SCORE_CONFIG, "timePointsPerKm", 0, 200, 1).name("タイム満点(pt/km)");
+  scoring.add(SCORE_CONFIG, "rhythmToleranceMs", 0, 500, 10).name("リズム許容幅(±ms)");
+  scoring.add(SCORE_CONFIG, "rhythmPointsPerTap", 0, 100, 1).name("リズム1回(pt)");
+  scoring.add(SCORE_CONFIG, "comboStep", 1, 30, 1).name("倍率が上がるコンボ数");
+  scoring.add(SCORE_CONFIG, "comboMultiplierStep", 0, 2, 0.1).name("倍率の上がり幅");
+  scoring.add(SCORE_CONFIG, "maxComboMultiplier", 1, 10, 0.1).name("リズム倍率の上限");
+  scoring.add(SCORE_CONFIG, "relayPerfectMs", 0, 400, 5).name("襷PERFECT幅(ms)");
+  scoring.add(SCORE_CONFIG, "relayGoodMs", 0, 400, 5).name("襷GOOD幅(ms)");
+  scoring.add(SCORE_CONFIG, "relayPerfectPoints", 0, 2000, 10).name("襷PERFECT(pt)");
+  scoring.add(SCORE_CONFIG, "relayGoodPoints", 0, 2000, 10).name("襷GOOD(pt)");
+  scoring.add(SCORE_CONFIG, "fullRelayBonus", 0, 20000, 100).name("全区間ボーナス(pt)");
+  scoring.add(SCORE_CONFIG, "secondStageMultiplier", 1, 3, 0.05).name("6区以降の倍率");
+  scoring.close();
+
+  // ポイント計算の見える化：今のレースの内訳を区間ごと・項目ごとに表で出す
+  const breakdownFolder = gui.addFolder("ポイント内訳");
+  const table = document.createElement("div");
+  table.style.cssText = "padding:6px 8px;font-size:11px;line-height:1.5;overflow-x:auto";
+  breakdownFolder.$children.appendChild(table);
+  let lastHtml = "";
+  const renderBreakdown = () => {
+    const race = game.registry.get("race") as Race | undefined;
+    const html = race ? breakdownHtml(race) : "まだレースが始まっていません";
+    if (html !== lastHtml) table.innerHTML = lastHtml = html;
+  };
+  renderBreakdown();
+  const breakdownTimer = window.setInterval(renderBreakdown, 250);
+
   // 値を変えたら自動でブラウザに保存
   gui.onFinishChange(saveToBrowser);
 
@@ -142,5 +172,28 @@ export function setupAdmin(game: Phaser.Game): () => void {
   save.add(actions, "saveToFile").name("現在の設定で保存（settings.json）");
   save.add(actions, "resetToFile").name("settings.json の値に戻す");
 
-  return () => gui.destroy();
+  return () => {
+    window.clearInterval(breakdownTimer);
+    gui.destroy();
+  };
+}
+
+function breakdownHtml(race: Race): string {
+  const b = race.breakdown();
+  const num = (n: number) => n.toLocaleString();
+  const cell = (v: string, bold = false) =>
+    `<td style="text-align:right;padding:0 4px;${bold ? "font-weight:bold" : ""}">${v}</td>`;
+  const head = ["区", "タイム", "リズム", "襷", "小計", "倍率", "合計"]
+    .map((h) => `<th style="text-align:right;padding:0 4px">${h}</th>`)
+    .join("");
+  const rows = b.sections
+    .map((s) => {
+      const relay = s.relayGrade ? `${num(s.relay)} <small>${s.relayGrade}</small>` : "-";
+      return `<tr>${cell(`${s.no}`)}${cell(num(s.time))}${cell(`${num(s.rhythm)} <small>最大${s.maxCombo}</small>`)}${cell(relay)}${cell(num(s.subtotal))}${cell(`×${s.multiplier}`)}${cell(num(s.total), true)}</tr>`;
+    })
+    .join("");
+  const footer =
+    `<tr><td colspan="6" style="text-align:right;padding:0 4px">全区間ボーナス${race.allConnected ? "" : "（10区間すべて走ると加算）"}</td>${cell(num(b.fullRelayBonus))}</tr>` +
+    `<tr><td colspan="6" style="text-align:right;padding:0 4px;font-weight:bold">最終ポイント</td>${cell(num(b.total), true)}</tr>`;
+  return `<table style="border-collapse:collapse;width:100%"><thead><tr>${head}</tr></thead><tbody>${rows}${footer}</tbody></table>`;
 }

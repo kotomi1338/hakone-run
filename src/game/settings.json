@@ -12,5 +12,19 @@
     "fallDurationMs": 300,
     "maxRate": 10,
     "speedSmoothingMs": 200
+  },
+  "score": {
+    "timePointsPerKm": 50,
+    "rhythmToleranceMs": 120,
+    "rhythmPointsPerTap": 10,
+    "comboStep": 5,
+    "comboMultiplierStep": 0.5,
+    "maxComboMultiplier": 3,
+    "relayPerfectMs": 80,
+    "relayGoodMs": 200,
+    "relayPerfectPoints": 300,
+    "relayGoodPoints": 100,
+    "fullRelayBonus": 2000,
+    "secondStageMultiplier": 1.2
   }
 }

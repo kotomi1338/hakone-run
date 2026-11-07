@@ -46,6 +46,8 @@ export class TapMeter {
   }
 }
 
+export type TapResult = "accepted" | "fell" | "rejected" | "ignored";
+
 export class Runner {
   /** 走った距離（km） */
   distanceKm = 0;
@@ -89,11 +91,15 @@ export class Runner {
     return 1 / this.course.secondsPerKm;
   }
 
-  tap(now: number): void {
-    if (this.isFallen(now) || this.finished) return;
+  /**
+   * 連打を受け付ける。結果：
+   * accepted 受け付けた / fell 受け付けたが押しすぎで転んだ / rejected 上限超えで無視 / ignored 転倒中・ゴール後
+   */
+  tap(now: number): TapResult {
+    if (this.isFallen(now) || this.finished) return "ignored";
     if (!this.meter.tap(now)) {
       this.rejectedTapCount++;
-      return;
+      return "rejected";
     }
     this.tapCount++;
 
@@ -101,7 +107,11 @@ export class Runner {
     const tooFast = this.lastTapAt !== null && now - this.lastTapAt < this.config.fallIntervalMs;
     this.fastStreak = tooFast ? this.fastStreak + 1 : 0;
     this.lastTapAt = now;
-    if (this.fastStreak >= this.config.fallStreak) this.fall(now);
+    if (this.fastStreak >= this.config.fallStreak) {
+      this.fall(now);
+      return "fell";
+    }
+    return "accepted";
   }
 
   /**
