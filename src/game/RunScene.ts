@@ -1,33 +1,47 @@
 import Phaser from "phaser";
+import { createTextures, FAN_COLORS } from "./art/textures";
 import { COURSE_CONFIG, RUN_CONFIG, SCORE_CONFIG, type SectionConfig } from "./config";
 import { bindGameKeys, formatTime } from "./input";
+import { isSunny, ITEM_ACTIONS, ITEM_NAMES, ItemTracker, sunnyZoneOf, type ItemKind, type ItemResult } from "./items";
 import { FONT, GAME_HEIGHT, GAME_WIDTH, TEXT_COLOR } from "./layout";
 import { Race, sectionsOfStage, STAGE_NAMES } from "./race";
 import { Runner } from "./runner";
-import { elevationAt, segmentAt } from "./terrain";
-import { SlopeBonus, type SlopeBonusEvent } from "./slopeBonus";
-import { isSunny, ITEM_ACTIONS, ITEM_NAMES, ItemTracker, sunnyZoneOf, type ItemKind, type ItemResult } from "./items";
-import { LastSpurt, spurtZoneOf } from "./spurt";
 import { judgeRelay, RhythmCombo, sectionMultiplier, type RelayGrade } from "./score";
+import { SlopeBonus, type SlopeBonusEvent } from "./slopeBonus";
+import { inSpurt, LastSpurt, spurtZoneOf } from "./spurt";
+import { elevationAt, segmentAt } from "./terrain";
+import { Background, sceneryOf, type Scenery } from "./view/Background";
+import { Effects } from "./view/effects";
 
-const GROUND_Y = 400;
+/** 平地のとき、道路のいちばん奥（草地の上端）の高さ */
+const BASE_ROAD_Y = 372;
+/** 道路の奥の端からランナーの足元まで */
+const LANE_Y = 44;
+/** ランナーの絵の拡大率 */
+const RUNNER_SCALE = 1.25;
 /** 進む方向の反対側の端からランナーまでの距離（ピクセル） */
 const RUNNER_MARGIN_X = 240;
-const RUNNER_SIZE = 48;
 /** 最高速度のとき画面が1秒に流れるピクセル数（縮尺を変えても見た目の速さは一定） */
 const MAX_SCROLL_PX_PER_SEC = 1000;
+/** 坂を画面でどれだけ大げさに傾けるか（実際の勾配 × この倍率で描く） */
+const SLOPE_EXAGGERATION = 4;
 /** 距離表示どうしの最小間隔（ピクセル） */
 const MIN_LABEL_GAP_PX = 160;
+/** 観客を置く間隔（ピクセル） */
+const FAN_SLOT_PX = 30;
 /** 表示用の速度（最高速度のときの km/h） */
 const DISPLAY_TOP_KMH = 21;
 /** ゴール（5区・10区）に着いてから結果画面に移るまで（ミリ秒） */
-const GOAL_PAUSE_MS = 1500;
+const GOAL_PAUSE_MS = 2200;
 /** 襷リレーの表示を出しておく時間（ミリ秒）。走りは止まらない */
 const RELAY_MESSAGE_MS = 1500;
 /** 中継線までこのピクセル以内に近づいたら襷ゲージを出し、エンターを受け付ける */
 const RELAY_GAUGE_PX = 400;
+const HUD_DEPTH = 100;
 const RELAY_GRADE_COLORS: Record<RelayGrade, string> = { PERFECT: "#f2a900", GOOD: "#2e9e4f", MISS: "#7a7a7a" };
 const ITEM_LABEL_COLORS: Record<ItemKind, string> = { water: "#2e86de", cheer: "#e67e22", egg: "#222222" };
+
+type State = "ready" | "running" | "arrived";
 
 /** エンターで狙うもの（襷 or アイテム）と、そのずれ */
 interface TimingTarget {
@@ -38,12 +52,16 @@ interface TimingTarget {
   goodPx: number;
 }
 
-type State = "ready" | "running" | "arrived";
-
 export interface RunSceneData {
   race?: Race;
   /** true ならスペース待ちをせず、すぐに区間をスタートする（復路のスタートなど） */
   autoStart?: boolean;
+}
+
+/** 整数から 0〜1 の決まった値（観客の並びなどを毎回同じにする） */
+function hash(n: number): number {
+  const x = Math.sin(n * 91.7 + 17.3) * 43758.5453;
+  return x - Math.floor(x);
 }
 
 export class RunScene extends Phaser.Scene {
@@ -54,38 +72,62 @@ export class RunScene extends Phaser.Scene {
   private state: State = "ready";
   private startedAt = 0;
   private arrivedAt = 0;
-  private runPhase = 0;
   /** 進む向き。往路は左から右（右向き）なので +1、復路は右から左なので -1 */
   private dir: 1 | -1 = 1;
+  /** このシーンで前の区間から走ってきたか（区間ジャンプ直後は前の中継線の判定をしない） */
+  private ranPrev = false;
 
-  private bg!: Phaser.GameObjects.Graphics;
+  private combo!: RhythmCombo;
+  private slopeBonus!: SlopeBonus;
+  private lastSpurt!: LastSpurt;
+  /** 区間（SECTIONS の添字）ごとのアイテムの取った・取り損ね */
+  private itemTrackers = new Map<number, ItemTracker>();
+
+  // 見た目
+  private background!: Background;
+  private effects!: Effects;
+  private zoneGfx!: Phaser.GameObjects.Graphics;
   private road!: Phaser.GameObjects.Graphics;
+  private worldGfx!: Phaser.GameObjects.Graphics;
+  private fans: Phaser.GameObjects.Image[] = [];
   private kmLabels: Phaser.GameObjects.Text[] = [];
   /** 中継所・ゴールの看板（画面に同時に映るのはせいぜい2つ） */
   private postLabels: Phaser.GameObjects.Text[] = [];
   /** 給水・応援・黒たまごの看板 */
   private itemLabels: Phaser.GameObjects.Text[] = [];
-  /** 区間（SECTIONS の添字）ごとのアイテムの取った・取り損ね */
-  private itemTrackers = new Map<number, ItemTracker>();
-  private sectionTitle!: Phaser.GameObjects.Text;
-  private relayMessageTimer?: Phaser.Time.TimerEvent;
-  private combo!: RhythmCombo;
-  private slopeBonus!: SlopeBonus;
-  private lastSpurt!: LastSpurt;
+  private eggImages: Phaser.GameObjects.Image[] = [];
   /** 7区「日差しが強い」・10区「日本橋」の看板 */
   private zoneLabel!: Phaser.GameObjects.Text;
   private landmarkLabel!: Phaser.GameObjects.Text;
-  private slopeText!: Phaser.GameObjects.Text;
-  private pointsText!: Phaser.GameObjects.Text;
-  private comboText!: Phaser.GameObjects.Text;
-  private relayGauge!: Phaser.GameObjects.Graphics;
-  private relayGaugeText!: Phaser.GameObjects.Text;
-  private popText!: Phaser.GameObjects.Text;
-  private runnerRect!: Phaser.GameObjects.Rectangle;
+  private runnerSprite!: Phaser.GameObjects.Sprite;
+  /** 中継所で待っている次の走者 */
+  private nextRunner!: Phaser.GameObjects.Sprite;
+  /** 襷を渡し終えた前の走者（中継所に残って後ろへ流れていく） */
+  private prevRunner!: Phaser.GameObjects.Sprite;
+  private prevRunnerKm: number | null = null;
+  private prevRunnerAt = 0;
+  /** 画面での道路の高さの基準（坂で少し上下させて、前方が見えるようにする） */
+  private anchorRoadY = BASE_ROAD_Y;
+  private goalTapeBroken = false;
+  private wasInSpurt = false;
+  private lastPoints = 0;
+
+  // 画面の表示（HUD）
+  private hudPanel!: Phaser.GameObjects.Graphics;
+  private sectionTitle!: Phaser.GameObjects.Text;
   private hud!: Phaser.GameObjects.Text;
   private progressBar!: Phaser.GameObjects.Graphics;
+  private pointsText!: Phaser.GameObjects.Text;
+  private plusText!: Phaser.GameObjects.Text;
+  private comboText!: Phaser.GameObjects.Text;
+  private smallPopText!: Phaser.GameObjects.Text;
+  private relayGauge!: Phaser.GameObjects.Graphics;
+  private relayGaugeText!: Phaser.GameObjects.Text;
+  private messagePanel!: Phaser.GameObjects.Graphics;
+  private titleText!: Phaser.GameObjects.Text;
   private centerText!: Phaser.GameObjects.Text;
   private subText!: Phaser.GameObjects.Text;
+  private relayMessageTimer?: Phaser.Time.TimerEvent;
 
   constructor() {
     super("RunScene");
@@ -98,6 +140,7 @@ export class RunScene extends Phaser.Scene {
   }
 
   create(): void {
+    createTextures(this);
     this.runner = new Runner(RUN_CONFIG, this.section);
     this.combo = new RhythmCombo(RUN_CONFIG, SCORE_CONFIG);
     this.slopeBonus = new SlopeBonus(this.section.no, SCORE_CONFIG);
@@ -106,21 +149,29 @@ export class RunScene extends Phaser.Scene {
     // 管理画面のポイント内訳が今のレースを読めるようにする
     this.registry.set("race", this.race);
     this.state = "ready";
-    this.runPhase = 0;
     this.ranPrev = false;
     this.dir = this.race.stage === 1 ? 1 : -1;
+    this.prevRunnerKm = null;
+    this.anchorRoadY = BASE_ROAD_Y;
+    this.goalTapeBroken = false;
+    this.wasInSpurt = false;
+    this.lastPoints = this.race.breakdown().total;
 
-    this.cameras.main.setBackgroundColor("#bfe3ff");
-    this.bg = this.add.graphics();
+    // 奥から順に作る（後から作ったものが手前に描かれる）
+    this.background = new Background(this, this.dir, BASE_ROAD_Y);
+    this.zoneGfx = this.add.graphics();
     this.road = this.add.graphics();
     this.kmLabels = Array.from({ length: 8 }, () =>
-      this.add
-        .text(0, GROUND_Y + 92, "", { fontFamily: FONT, fontSize: "18px", color: "#ffffff" })
-        .setOrigin(0.5, 0),
+      this.add.text(0, 0, "", { fontFamily: FONT, fontSize: "18px", color: "#ffffff" }).setOrigin(0.5, 0),
     );
+    this.fans = Array.from({ length: 40 }, () =>
+      this.add.image(0, 0, "fans", "fan0_0").setOrigin(0.5, 1).setVisible(false),
+    );
+    this.worldGfx = this.add.graphics();
+    this.eggImages = Array.from({ length: 3 }, () => this.add.image(0, 0, "egg").setOrigin(0.5, 1).setVisible(false));
     this.postLabels = Array.from({ length: 3 }, () =>
       this.add
-        .text(0, GROUND_Y - 150, "", {
+        .text(0, 0, "", {
           fontFamily: FONT,
           fontSize: "22px",
           color: "#ffffff",
@@ -135,7 +186,7 @@ export class RunScene extends Phaser.Scene {
         .setOrigin(0.5, 1),
     );
     this.zoneLabel = this.add
-      .text(0, GROUND_Y - 120, "日差しが強い  給水×2", {
+      .text(0, 0, "", {
         fontFamily: FONT,
         fontSize: "18px",
         color: "#b35c00",
@@ -146,7 +197,7 @@ export class RunScene extends Phaser.Scene {
       .setOrigin(0.5, 1)
       .setVisible(false);
     this.landmarkLabel = this.add
-      .text(0, GROUND_Y - 70, "", {
+      .text(0, 0, "", {
         fontFamily: FONT,
         fontSize: "20px",
         color: "#ffffff",
@@ -157,94 +208,16 @@ export class RunScene extends Phaser.Scene {
       .setOrigin(0.5, 1)
       .setVisible(false);
 
-    this.runnerRect = this.add
-      .rectangle(this.runnerX, GROUND_Y, RUNNER_SIZE, RUNNER_SIZE, 0x1e5bd8)
+    this.prevRunner = this.add.sprite(0, 0, "runner", "stand").setOrigin(0.5, 1).setScale(RUNNER_SCALE).setVisible(false);
+    this.nextRunner = this.add.sprite(0, 0, "runner", "stand").setOrigin(0.5, 1).setScale(RUNNER_SCALE).setVisible(false);
+    this.runnerSprite = this.add
+      .sprite(this.runnerX, BASE_ROAD_Y + LANE_Y, "runner", "stand")
       .setOrigin(0.5, 1)
-      .setStrokeStyle(3, 0x0b2a6b);
+      .setScale(RUNNER_SCALE)
+      .setFlipX(this.dir === -1);
 
-    this.progressBar = this.add.graphics();
-    this.add.text(24, 12, STAGE_NAMES[this.race.stage], {
-      fontFamily: FONT,
-      fontSize: "15px",
-      color: TEXT_COLOR,
-    });
-    this.sectionTitle = this.add.text(24, 32, "", {
-      fontFamily: FONT,
-      fontSize: "22px",
-      color: TEXT_COLOR,
-      fontStyle: "bold",
-    });
-    this.updateSectionTitle();
-    this.hud = this.add.text(24, 70, "", {
-      fontFamily: FONT,
-      fontSize: "18px",
-      color: TEXT_COLOR,
-      lineSpacing: 6,
-    });
-
-    // ポイント（常に表示）
-    this.pointsText = this.add
-      .text(GAME_WIDTH - 24, 78, "", { fontFamily: FONT, fontSize: "28px", color: TEXT_COLOR, fontStyle: "bold" })
-      .setOrigin(1, 0);
-    this.comboText = this.add
-      .text(GAME_WIDTH - 24, 116, "", { fontFamily: FONT, fontSize: "18px", color: TEXT_COLOR, lineSpacing: 4, align: "right" })
-      .setOrigin(1, 0);
-
-    this.slopeText = this.add
-      .text(0, GROUND_Y - 80, "", {
-        fontFamily: FONT,
-        fontSize: "20px",
-        color: "#2e9e4f",
-        fontStyle: "bold",
-        stroke: "#ffffff",
-        strokeThickness: 4,
-      })
-      .setOrigin(0.5, 1)
-      .setVisible(false);
-
-    this.relayGauge = this.add.graphics();
-    this.relayGaugeText = this.add
-      .text(GAME_WIDTH / 2, 116, "Enterで襷を渡す！", {
-        fontFamily: FONT,
-        fontSize: "20px",
-        color: "#c0392b",
-        fontStyle: "bold",
-        stroke: "#ffffff",
-        strokeThickness: 4,
-      })
-      .setOrigin(0.5, 0)
-      .setVisible(false);
-    this.popText = this.add
-      .text(GAME_WIDTH / 2, 150, "", {
-        fontFamily: FONT,
-        fontSize: "34px",
-        color: "#f2a900",
-        fontStyle: "bold",
-        stroke: "#ffffff",
-        strokeThickness: 6,
-      })
-      .setOrigin(0.5)
-      .setVisible(false);
-
-    this.centerText = this.add
-      .text(GAME_WIDTH / 2, 200, "スペースキーを連打してスタート！", {
-        fontFamily: FONT,
-        fontSize: "36px",
-        color: TEXT_COLOR,
-        fontStyle: "bold",
-        stroke: "#ffffff",
-        strokeThickness: 6,
-      })
-      .setOrigin(0.5);
-    this.subText = this.add
-      .text(GAME_WIDTH / 2, 250, "速く連打するほど速く走る。でも連打しすぎると転ぶ", {
-        fontFamily: FONT,
-        fontSize: "20px",
-        color: TEXT_COLOR,
-        stroke: "#ffffff",
-        strokeThickness: 4,
-      })
-      .setOrigin(0.5);
+    this.effects = new Effects(this);
+    this.createHud();
 
     bindGameKeys(this, {
       onSpace: (now) => {
@@ -258,33 +231,187 @@ export class RunScene extends Phaser.Scene {
 
     if (this.autoStart) this.start(performance.now());
 
-    this.drawWorld();
+    this.drawWorld(performance.now());
     this.drawHud(performance.now());
   }
+
+  private createHud(): void {
+    const hudText = (x: number, y: number, size: number, bold = false) =>
+      this.add
+        .text(x, y, "", { fontFamily: FONT, fontSize: `${size}px`, color: TEXT_COLOR, fontStyle: bold ? "bold" : "normal" })
+        .setDepth(HUD_DEPTH);
+
+    this.hudPanel = this.add.graphics().setDepth(HUD_DEPTH - 1);
+    this.progressBar = this.add.graphics().setDepth(HUD_DEPTH);
+    hudText(24, 12, 15).setText(STAGE_NAMES[this.race.stage]);
+    this.sectionTitle = hudText(24, 32, 22, true);
+    this.updateSectionTitle();
+    this.hud = hudText(24, 70, 18).setLineSpacing(6);
+
+    // ポイント（常に表示）
+    this.pointsText = hudText(GAME_WIDTH - 24, 78, 28, true).setOrigin(1, 0);
+    this.plusText = hudText(0, 84, 20, true).setOrigin(1, 0).setColor("#e67e22").setVisible(false);
+    this.comboText = hudText(GAME_WIDTH - 24, 116, 18).setOrigin(1, 0).setLineSpacing(4).setAlign("right");
+
+    this.smallPopText = this.add
+      .text(0, 0, "", {
+        fontFamily: FONT,
+        fontSize: "20px",
+        color: "#2e9e4f",
+        fontStyle: "bold",
+        stroke: "#ffffff",
+        strokeThickness: 4,
+      })
+      .setOrigin(0.5, 1)
+      .setDepth(HUD_DEPTH)
+      .setVisible(false);
+
+    this.relayGauge = this.add.graphics().setDepth(HUD_DEPTH);
+    this.relayGaugeText = this.add
+      .text(GAME_WIDTH / 2, 116, "", {
+        fontFamily: FONT,
+        fontSize: "20px",
+        color: "#c0392b",
+        fontStyle: "bold",
+        stroke: "#ffffff",
+        strokeThickness: 4,
+      })
+      .setOrigin(0.5, 0)
+      .setDepth(HUD_DEPTH)
+      .setVisible(false);
+
+    this.messagePanel = this.add.graphics().setDepth(HUD_DEPTH - 1);
+    this.titleText = this.add
+      .text(GAME_WIDTH / 2, 176, "箱根駅伝 連打ラン", {
+        fontFamily: FONT,
+        fontSize: "46px",
+        color: "#c0392b",
+        fontStyle: "bold",
+        stroke: "#ffffff",
+        strokeThickness: 8,
+      })
+      .setOrigin(0.5)
+      .setDepth(HUD_DEPTH)
+      .setVisible(false);
+    this.centerText = this.add
+      .text(GAME_WIDTH / 2, 236, "スペースキーを連打してスタート！", {
+        fontFamily: FONT,
+        fontSize: "34px",
+        color: TEXT_COLOR,
+        fontStyle: "bold",
+        stroke: "#ffffff",
+        strokeThickness: 6,
+      })
+      .setOrigin(0.5)
+      .setDepth(HUD_DEPTH);
+    this.subText = this.add
+      .text(GAME_WIDTH / 2, 282, "速く連打するほど速く走る。でも連打しすぎると転ぶ", {
+        fontFamily: FONT,
+        fontSize: "20px",
+        color: TEXT_COLOR,
+        stroke: "#ffffff",
+        strokeThickness: 4,
+      })
+      .setOrigin(0.5)
+      .setDepth(HUD_DEPTH);
+
+    // 最初の区間のスタート前だけタイトルを出す
+    if (!this.autoStart) {
+      this.titleText.setVisible(this.race.sectionIndex === 0);
+      this.tweens.add({ targets: this.centerText, scale: 1.06, duration: 600, yoyo: true, repeat: -1, ease: "Sine.InOut" });
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // 位置の計算
 
   /** ランナーの画面上の位置。進む方向の反対側に寄せて、前方が見えるようにする */
   private get runnerX(): number {
     return this.dir === 1 ? RUNNER_MARGIN_X : GAME_WIDTH - RUNNER_MARGIN_X;
   }
 
-  /** 右向き（往路）で計算した x を、復路なら左右反転する。w は矩形の幅 */
-  private mx(x: number, w = 0): number {
-    return this.dir === 1 ? x : GAME_WIDTH - x - w;
-  }
-
-  private onTap(now: number): void {
-    const result = this.runner.tap(now);
-    if (result === "accepted") {
-      const points = this.combo.tap(now);
-      if (points > 0) this.race.addRhythm(points, this.combo.combo);
-    } else if (result === "fell") {
-      this.combo.break();
-    }
+  /** 右向き（往路）で計算した x を、復路なら左右反転する */
+  private mx(x: number): number {
+    return this.dir === 1 ? x : GAME_WIDTH - x;
   }
 
   /** 画面上で 1km を何ピクセルで描くか（管理画面で縮尺を変えるとその場で変わる） */
   private get pxPerKm(): number {
     return MAX_SCROLL_PX_PER_SEC * COURSE_CONFIG.secondsPerKm;
+  }
+
+  /** ステージのスタートからランナーまでの距離（km） */
+  private get runnerWorldKm(): number {
+    return this.race.sectionStartKm + this.runner.distanceKm;
+  }
+
+  /** ステージのスタートから worldKm の地点の画面上の x */
+  private toScreenX(worldKm: number): number {
+    return this.mx((worldKm - this.runnerWorldKm) * this.pxPerKm + RUNNER_MARGIN_X);
+  }
+
+  /** 画面上の x の地点の、ステージのスタートからの距離（km） */
+  private worldKmAt(screenX: number): number {
+    const right = this.dir === 1 ? screenX : GAME_WIDTH - screenX;
+    return this.runnerWorldKm + (right - RUNNER_MARGIN_X) / this.pxPerKm;
+  }
+
+  /** ステージのスタートからの標高差（m） */
+  private stageElevation(worldKm: number): number {
+    let start = 0;
+    let base = 0;
+    for (const s of sectionsOfStage(this.race.stage)) {
+      if (worldKm <= start + s.distanceKm) return base + elevationAt(s.no, Math.max(0, worldKm - start));
+      base += elevationAt(s.no, s.distanceKm);
+      start += s.distanceKm;
+    }
+    return base;
+  }
+
+  /** その地点の道路の奥の端（草地の上端）の画面上の y。坂で上下する */
+  private roadTop(worldKm: number): number {
+    const meters = this.stageElevation(worldKm) - this.stageElevation(this.runnerWorldKm);
+    return this.anchorRoadY - meters * (this.pxPerKm / 1000) * SLOPE_EXAGGERATION;
+  }
+
+  /** その地点の画面上のランナーの足元の y */
+  private laneY(worldKm: number): number {
+    return this.roadTop(worldKm) + LANE_Y;
+  }
+
+  /** ステージのスタートから見た、その区間のスタート位置（km） */
+  private sectionStartWorldKm(sectionNo: number): number {
+    let start = 0;
+    for (const s of sectionsOfStage(this.race.stage)) {
+      if (s.no === sectionNo) return start;
+      start += s.distanceKm;
+    }
+    return start;
+  }
+
+  // ---------------------------------------------------------------------------
+  // 入力
+
+  private onTap(now: number): void {
+    const result = this.runner.tap(now);
+    if (result === "accepted") {
+      const points = this.combo.tap(now);
+      if (points > 0) {
+        this.race.addRhythm(points, this.combo.combo);
+        // コンボの倍率が上がった瞬間に演出
+        if (this.combo.combo % Math.max(1, SCORE_CONFIG.comboStep) === 0) {
+          const y = this.laneY(this.runnerWorldKm) - 165;
+          this.effects.bigText(`${this.combo.combo} COMBO  ×${this.combo.multiplier.toFixed(1)}`, this.runnerX, y, "#e67e22", 24);
+          this.effects.sparkle(this.runnerX, y + 30, 10, 0xffb347);
+        }
+      }
+    } else if (result === "fell") {
+      this.combo.break();
+      const y = this.laneY(this.runnerWorldKm);
+      this.effects.dust(this.runnerX, y, 18);
+      this.effects.bigText("転倒！", this.runnerX, y - 110, "#d84b1e", 30);
+      this.cameras.main.shake(180, 0.006);
+    }
   }
 
   /**
@@ -306,10 +433,7 @@ export class RunScene extends Phaser.Scene {
     return null;
   }
 
-  /** このシーンで前の区間から走ってきたか（区間ジャンプ直後は前の中継線の判定をしない） */
-  private ranPrev = false;
-
-  /** 今の区間のアイテム管理（なければ作る） */
+  /** その区間のアイテム管理（なければ作る） */
   private trackerOf(sectionIndex: number): ItemTracker {
     let t = this.itemTrackers.get(sectionIndex);
     if (!t) {
@@ -331,12 +455,7 @@ export class RunScene extends Phaser.Scene {
     }
     const item = this.itemTracker.target(this.runner.distanceKm, this.pxPerKm, RELAY_GAUGE_PX);
     if (item) {
-      return {
-        px: item.offsetPx,
-        label: ITEM_ACTIONS[item.item.kind],
-        perfectPx: SCORE_CONFIG.itemPerfectMs,
-        goodPx: SCORE_CONFIG.itemGoodMs,
-      };
+      return { px: item.offsetPx, label: ITEM_ACTIONS[item.item.kind], perfectPx: SCORE_CONFIG.itemPerfectMs, goodPx: SCORE_CONFIG.itemGoodMs };
     }
     return null;
   }
@@ -352,6 +471,9 @@ export class RunScene extends Phaser.Scene {
     // 中継所やアイテムの近く以外でのエンターは何もしない
   }
 
+  // ---------------------------------------------------------------------------
+  // 判定の結果と演出
+
   private applyItem(result: ItemResult): void {
     const got = result.grade !== "MISS";
     this.race.addItem(result.points, got);
@@ -362,44 +484,66 @@ export class RunScene extends Phaser.Scene {
     }
     const mult = sectionMultiplier(this.section.no, SCORE_CONFIG);
     const label = result.sunny ? `日差し${name}×${SCORE_CONFIG.sunnyWaterMultiplier}` : name;
-    this.showPop(`${label} ${result.grade}!  +${Math.round(result.points * mult)}`, RELAY_GRADE_COLORS[result.grade]);
+    this.effects.bigText(`${label} ${result.grade}!  +${Math.round(result.points * mult)}`, GAME_WIDTH / 2, 186, RELAY_GRADE_COLORS[result.grade], 30);
+
+    // アイテムごとの動き
+    const worldKm = this.race.sectionStartKm + result.item.km;
+    const x = this.toScreenX(worldKm);
+    const y = this.laneY(worldKm) - 20;
+    const runnerY = this.laneY(this.runnerWorldKm);
+    if (result.item.kind === "egg") {
+      // 黒たまごはポンと跳ねてポイントの表示へ飛んでいく
+      this.effects.fly("egg", x, y - 10, GAME_WIDTH - 90, 94, 650, () => {
+        this.effects.sparkle(GAME_WIDTH - 90, 94, 18, 0xffe066);
+      });
+    } else if (result.item.kind === "water") {
+      this.effects.fly("cup", x, y - 30, this.runnerX, runnerY - 55, 380, () => {
+        this.effects.splash(this.runnerX, runnerY - 55, 18);
+      });
+    } else {
+      this.effects.confetti(x, y - 70, 36);
+    }
   }
 
   private judge(index: number, grade: RelayGrade): void {
     this.race.setRelay(index, grade);
     const points = this.race.sectionScores[index]?.relay ?? 0;
     const mult = sectionMultiplier(index + 1, SCORE_CONFIG);
-    this.showPop(grade === "MISS" ? "MISS…" : `${grade}!  +${Math.round(points * mult)}`, RELAY_GRADE_COLORS[grade]);
+    if (grade === "MISS") {
+      this.effects.bigText("MISS…", GAME_WIDTH / 2, 186, RELAY_GRADE_COLORS.MISS, 34);
+      return;
+    }
+    this.effects.bigText(`${grade}!  +${Math.round(points * mult)}`, GAME_WIDTH / 2, 186, RELAY_GRADE_COLORS[grade], grade === "PERFECT" ? 46 : 38);
+    this.effects.sparkle(GAME_WIDTH / 2, 186, grade === "PERFECT" ? 28 : 14, grade === "PERFECT" ? 0xffd34d : 0x7fd67f);
+    if (grade === "PERFECT") this.cameras.main.flash(120, 255, 250, 210);
   }
 
-  private showPop(text: string, color: string): void {
-    this.tweens.killTweensOf(this.popText);
-    this.popText.setText(text).setColor(color).setVisible(true).setAlpha(1).setY(150).setScale(1.3);
-    this.tweens.add({ targets: this.popText, scale: 1, duration: 150, ease: "Back.Out" });
-    this.tweens.add({
-      targets: this.popText,
-      y: 120,
-      alpha: 0,
-      delay: 700,
-      duration: 500,
-      onComplete: () => this.popText.setVisible(false),
-    });
+  /** ランナーの頭の上に小さく出して消える表示 */
+  private showSmallPop(text: string, color: string): void {
+    const y = this.laneY(this.runnerWorldKm) - 108;
+    this.tweens.killTweensOf(this.smallPopText);
+    this.smallPopText.setText(text).setColor(color).setPosition(this.runnerX, y).setAlpha(1).setVisible(true);
+    this.tweens.add({ targets: this.smallPopText, y: y - 30, alpha: 0, duration: 700, delay: 200 });
   }
 
   private start(now: number): void {
     this.state = "running";
     this.startedAt = now;
-    this.centerText.setVisible(false);
+    this.tweens.killTweensOf(this.centerText);
+    this.centerText.setScale(1).setVisible(false);
     this.subText.setVisible(false);
+    this.titleText.setVisible(false);
+    this.effects.bigText("スタート！", GAME_WIDTH / 2, 236, "#c0392b", 44);
   }
 
-  update(_time: number, delta: number): void {
+  update(time: number, delta: number): void {
     const now = performance.now();
 
     if (this.state === "running") {
       this.runner.update(now, delta);
       this.updateSlopeBonus(now, delta);
       this.lastSpurt.update(this.runner.distanceKm, this.runner.isFallen(now) ? 0 : this.runner.speedRatio, delta);
+      this.checkSpurtStart();
       if (this.runner.finished) {
         if (this.race.isStageLastSection) this.arrive(now);
         else this.relay(now);
@@ -411,15 +555,24 @@ export class RunScene extends Phaser.Scene {
       for (const r of this.itemTracker.missPassed(this.runner.distanceKm, this.pxPerKm)) this.applyItem(r);
     }
 
-    const fallen = this.runner.isFallen(now);
-    this.runPhase += this.runner.speedRatio * delta * 0.03;
-    const bob = fallen ? 0 : Math.abs(Math.sin(this.runPhase)) * 10 * this.runner.speedRatio;
-    this.runnerRect.y = GROUND_Y - bob;
-    this.runnerRect.angle = (fallen ? 90 : this.runner.speedRatio * 12) * this.dir;
-    this.runnerRect.fillColor = fallen ? 0xd84b1e : 0x1e5bd8;
+    // 坂では道路の基準の高さを少し動かして、上りは前方の坂が、下りは下った先が見えるようにする
+    const targetAnchor = BASE_ROAD_Y + Phaser.Math.Clamp(this.runner.grade * 7, -48, 48);
+    this.anchorRoadY += (targetAnchor - this.anchorRoadY) * Math.min(1, delta / 500);
 
-    this.drawWorld();
+    this.updateRunnerSprite(now);
+    this.drawWorld(time);
     this.drawHud(now);
+    this.effects.updateStreaks(this.state === "running" ? this.runner.actualSpeed : 0, this.dir, time);
+  }
+
+  /** 10区で日本橋を越えた瞬間 */
+  private checkSpurtStart(): void {
+    const spurt = inSpurt(this.section.no, this.runner.distanceKm);
+    if (spurt && !this.wasInSpurt) {
+      this.effects.bigText("ラストスパート！", GAME_WIDTH / 2, 236, "#8e44ad", 44);
+      this.effects.sparkle(GAME_WIDTH / 2, 236, 24, 0xd291ff);
+    }
+    this.wasInSpurt = spurt;
   }
 
   private updateSectionTitle(): void {
@@ -433,6 +586,7 @@ export class RunScene extends Phaser.Scene {
     const from = this.section;
     const taps = this.runner.tapCount;
     const falls = this.runner.fallCount;
+    const relayWorldKm = this.runnerWorldKm;
     this.race.recordSection(time);
     this.race.advance();
     this.section = this.race.section;
@@ -442,6 +596,14 @@ export class RunScene extends Phaser.Scene {
     this.startedAt = now;
     this.ranPrev = true;
     this.updateSectionTitle();
+
+    // 走り終えた走者は中継所に残り、襷が次の走者（プレイヤー）へ飛んでいく
+    this.prevRunnerKm = relayWorldKm;
+    this.prevRunnerAt = now;
+    const y = this.laneY(relayWorldKm);
+    this.effects.fly("sash", this.runnerX - 40 * this.dir, y - 50, this.runnerX, y - 45, 420, () => {
+      this.effects.sparkle(this.runnerX, y - 45, 12, 0xff9a3c);
+    });
 
     this.centerText.setText(`襷リレー！  ${from.no}区 → ${this.section.no}区`).setVisible(true);
     this.subText
@@ -466,11 +628,19 @@ export class RunScene extends Phaser.Scene {
       const bonus = this.lastSpurt.bonus(RUN_CONFIG, SCORE_CONFIG);
       this.race.setSpurt(bonus);
       const mult = sectionMultiplier(this.section.no, SCORE_CONFIG);
-      this.showPop(`ラストスパート  +${Math.round(bonus * mult)}`, "#8e44ad");
+      this.effects.bigText(`ラストスパート  +${Math.round(bonus * mult)}`, GAME_WIDTH / 2, 186, "#8e44ad", 34);
     }
 
+    // ゴールテープを切って紙吹雪
+    this.goalTapeBroken = true;
+    const y = this.laneY(this.runnerWorldKm);
+    this.effects.confetti(this.runnerX, y - 120, 60);
+    this.time.delayedCall(250, () => this.effects.confetti(GAME_WIDTH / 2, 120, 70));
+    this.time.delayedCall(550, () => this.effects.confetti(this.runnerX + 200 * this.dir, 140, 60));
+
     const label = this.race.stage === 1 ? "往路ゴール！" : "総合ゴール！";
-    this.centerText.setText(`${this.section.to} ${label}`).setVisible(true);
+    this.centerText.setText(`${this.section.to} ${label}`).setVisible(true).setScale(0.4);
+    this.tweens.add({ targets: this.centerText, scale: 1.15, duration: 300, ease: "Back.Out" });
     this.subText
       .setText(`区間タイム ${formatTime(time)}   連打 ${this.runner.tapCount}回 / 転倒 ${this.runner.fallCount}回`)
       .setVisible(true);
@@ -480,75 +650,177 @@ export class RunScene extends Phaser.Scene {
     });
   }
 
-  private drawWorld(): void {
-    // 画面上で 1km を何ピクセルで描くか（管理画面で縮尺を変えるとその場で変わる）
-    const pxPerKm = MAX_SCROLL_PX_PER_SEC * COURSE_CONFIG.secondsPerKm;
-    // ステージ全体を1本の道として描く（中継所を通過しても景色がつながる）
-    const sectionStartKm = this.race.sectionStartKm;
-    const offsetPx = (sectionStartKm + this.runner.distanceKm) * pxPerKm;
-    /** ステージのスタートから worldKm の地点の画面上の x */
-    const toScreenX = (worldKm: number) => this.mx(worldKm * pxPerKm - offsetPx + RUNNER_MARGIN_X);
+  // ---------------------------------------------------------------------------
+  // 描画
 
-    // 以下は右向き（往路）として位置を計算し、mx() で復路のときは左右反転する
-    // 遠景のビル（ゆっくり流れる）
-    const g = this.bg;
-    g.clear();
-    const landmarkX = this.drawZones(g, toScreenX);
-    const farOffset = offsetPx * 0.25;
-    const bw = 90;
-    const first = Math.floor(farOffset / bw);
-    for (let i = first; i < first + GAME_WIDTH / bw + 2; i++) {
-      const h = 60 + ((i * 7919) % 110);
-      const x = i * bw - farOffset;
-      g.fillStyle(i % 2 === 0 ? 0x9fbad6 : 0x8aa7c7);
-      g.fillRect(this.mx(x, bw - 8), GROUND_Y - h, bw - 8, h);
+  /** ランナーのアニメ：連打の速さに合わせて走るモーションの速さを変える。坂では体を傾ける */
+  private updateRunnerSprite(now: number): void {
+    const sprite = this.runnerSprite;
+    const km = this.runnerWorldKm;
+    const y = this.laneY(km);
+    sprite.setPosition(this.runnerX, y);
+
+    if (this.runner.isFallen(now)) {
+      sprite.anims.stop();
+      sprite.setFrame("run2").setAngle(80 * this.dir).setY(y - 4);
+      return;
     }
+    const speed = this.state === "arrived" ? 0.3 : this.runner.actualSpeed;
+    if (speed < 0.03 && this.state !== "arrived") {
+      sprite.anims.stop();
+      sprite.setFrame("stand");
+    } else {
+      if (!sprite.anims.isPlaying) sprite.play("run");
+      sprite.anims.timeScale = 0.35 + speed * 1.3;
+    }
+    // 道路の傾きに合わせて体を傾け、速いほど少し前傾する
+    const dx = this.toScreenX(km + 0.05) - this.toScreenX(km - 0.05);
+    const dy = this.laneY(km + 0.05) - this.laneY(km - 0.05);
+    const slopeDeg = dx === 0 ? 0 : Phaser.Math.RadToDeg(Math.atan(dy / dx));
+    sprite.setAngle(slopeDeg + this.runner.speedRatio * 6 * this.dir);
+  }
 
-    // 道路
+  private drawWorld(timeMs: number): void {
+    const pxPerKm = this.pxPerKm;
+    const offsetPx = this.runnerWorldKm * pxPerKm;
+    const stageSections = sectionsOfStage(this.race.stage);
+    const sceneryAt = (px: number): Scenery => {
+      let start = 0;
+      for (const s of stageSections) {
+        start += s.distanceKm * pxPerKm;
+        if (px < start) return sceneryOf(s.no);
+      }
+      return sceneryOf(stageSections[stageSections.length - 1].no);
+    };
+    this.background.update(offsetPx, sceneryAt, timeMs);
+
+    this.drawZones();
+    this.drawRoad(timeMs);
+    this.drawFans(timeMs);
+    this.drawCourseObjects(timeMs);
+    this.drawOtherRunners(timeMs);
+  }
+
+  /** 坂に合わせて傾いた道路（草地・車道・路肩）と中央線 */
+  private drawRoad(_timeMs: number): void {
     const r = this.road;
     r.clear();
-    r.fillStyle(0x6b8e4e).fillRect(0, GROUND_Y, GAME_WIDTH, 20);
-    r.fillStyle(0x4a4f57).fillRect(0, GROUND_Y + 20, GAME_WIDTH, 120);
-    r.fillStyle(0x3b3f45).fillRect(0, GAME_HEIGHT - 20, GAME_WIDTH, 20);
+    const step = 16;
+    const xs: number[] = [];
+    for (let x = -step; x <= GAME_WIDTH + step; x += step) xs.push(x);
+    const tops = xs.map((x) => this.roadTop(this.worldKmAt(x)));
+    const band = (fromOff: number, toOff: number | null, color: number) => {
+      const pts = xs.map((x, i) => new Phaser.Math.Vector2(x, tops[i] + fromOff));
+      for (let i = xs.length - 1; i >= 0; i--) {
+        pts.push(new Phaser.Math.Vector2(xs[i], toOff === null ? GAME_HEIGHT : tops[i] + toOff));
+      }
+      r.fillStyle(color, 1).fillPoints(pts, true);
+    };
+    band(0, null, 0x2d3036);
+    band(0, 18, 0x6b8e4e);
+    band(18, 22, 0xd9d4c3);
+    band(22, 128, 0x4a4f57);
+    band(128, 134, 0xd9d4c3);
 
-    // 中央線（手前なので速く流れる）
-    const dash = 80;
-    const firstDash = Math.floor(offsetPx / dash);
-    r.fillStyle(0xf5f5f5);
-    for (let i = firstDash; i < firstDash + GAME_WIDTH / dash + 2; i++) {
-      r.fillRect(this.mx(i * dash - offsetPx, dash / 2), GROUND_Y + 66, dash / 2, 6);
+    // 中央線（世界に固定された破線）
+    const dashKm = 80 / this.pxPerKm;
+    const leftKm = Math.min(this.worldKmAt(0), this.worldKmAt(GAME_WIDTH));
+    const rightKm = Math.max(this.worldKmAt(0), this.worldKmAt(GAME_WIDTH));
+    r.lineStyle(6, 0xf5f5f5, 1);
+    for (let k = Math.floor(leftKm / dashKm) - 1; k * dashKm < rightKm + dashKm; k++) {
+      const a = k * dashKm;
+      const b = a + dashKm / 2;
+      r.lineBetween(this.toScreenX(a), this.roadTop(a) + 78, this.toScreenX(b), this.roadTop(b) + 78);
     }
+  }
 
-    // 日本橋（仮の図形）：欄干と橋脚
-    if (landmarkX !== null) {
-      r.fillStyle(0x7f8c8d).fillRect(landmarkX - 70, GROUND_Y - 24, 140, 8);
-      r.fillRect(landmarkX - 66, GROUND_Y - 16, 8, 16).fillRect(landmarkX + 58, GROUND_Y - 16, 8, 16);
-    }
-
-    // 距離表示（各区間のスタートからの km）と、中継所・ゴール
+  /** 沿道の観客。中継所・ゴールの近くや応援ポイントほど多く、街の区間は山の区間より多い */
+  private drawFans(timeMs: number): void {
     const stageSections = sectionsOfStage(this.race.stage);
-    const stepKm = Math.max(1, Math.ceil(MIN_LABEL_GAP_PX / pxPerKm));
+    const hot: number[] = [];
+    let start = 0;
+    for (const s of stageSections) {
+      hot.push(start + s.distanceKm);
+      for (const item of this.trackerOf(s.no - 1).items) if (item.kind === "cheer") hot.push(start + item.km);
+      start += s.distanceKm;
+    }
+    const density = (km: number): number => {
+      const near = hot.some((h) => km > h - 1.2 && km < h + 0.4);
+      if (near) return 0.95;
+      if (km < 0.8) return 0.8;
+      let s0 = 0;
+      for (const s of stageSections) {
+        if (km < s0 + s.distanceKm) {
+          const scenery = sceneryOf(s.no);
+          return scenery === "city" ? 0.45 : scenery === "coast" ? 0.25 : 0.12;
+        }
+        s0 += s.distanceKm;
+      }
+      return 0.3;
+    };
+
+    const slotKm = FAN_SLOT_PX / this.pxPerKm;
+    const leftKm = Math.min(this.worldKmAt(-20), this.worldKmAt(GAME_WIDTH + 20));
+    const rightKm = Math.max(this.worldKmAt(-20), this.worldKmAt(GAME_WIDTH + 20));
+    let idx = 0;
+    for (let n = Math.floor(leftKm / slotKm); n * slotKm <= rightKm && idx < this.fans.length; n++) {
+      const km = n * slotKm;
+      if (km < 0 || hash(n) > density(km)) continue;
+      const color = Math.floor(hash(n + 7) * FAN_COLORS.length);
+      // 腕を振るタイミングを人ごとにずらす
+      const up = Math.floor(timeMs / 260 + hash(n + 3) * 4) % 2;
+      const bob = up ? 2 : 0;
+      this.fans[idx++]
+        .setFrame(`fan${color}_${up}`)
+        .setPosition(this.toScreenX(km) + (hash(n + 11) - 0.5) * 10, this.roadTop(km) + 15 - bob)
+        .setScale(0.9 + hash(n + 5) * 0.25)
+        .setVisible(true);
+    }
+    for (let i = idx; i < this.fans.length; i++) this.fans[i].setVisible(false);
+  }
+
+  /** 距離表示、中継所・ゴール、給水・応援・黒たまご、日本橋 */
+  private drawCourseObjects(timeMs: number): void {
+    const g = this.worldGfx;
+    g.clear();
+    const stageSections = sectionsOfStage(this.race.stage);
+    const stepKm = Math.max(1, Math.ceil(MIN_LABEL_GAP_PX / this.pxPerKm));
     const inView = (x: number, margin: number) => x > -margin && x < GAME_WIDTH + margin;
     let labelIdx = 0;
     let postIdx = 0;
     let itemIdx = 0;
+    let eggIdx = 0;
     let startKm = 0;
     for (const s of stageSections) {
       const endKm = startKm + s.distanceKm;
+      // 距離表示（各区間のスタートからの km）
       for (let km = stepKm; km < s.distanceKm && labelIdx < this.kmLabels.length; km += stepKm) {
-        const x = toScreenX(startKm + km);
+        const x = this.toScreenX(startKm + km);
         if (!inView(x, 50)) continue;
-        this.kmLabels[labelIdx++].setText(`${km}km`).setX(x).setVisible(true);
-        r.fillStyle(0xffffff).fillRect(x - 2, GROUND_Y + 20, 4, 70);
+        const top = this.roadTop(startKm + km);
+        this.kmLabels[labelIdx++].setText(`${km}km`).setPosition(x, top + 96).setVisible(true);
+        g.fillStyle(0xffffff, 0.9).fillRect(x - 2, top + 22, 4, 70);
       }
+
+      // 給水・応援・黒たまご
       const tracker = this.trackerOf(s.no - 1);
       tracker.items.forEach((item, i) => {
-        const x = toScreenX(startKm + item.km);
+        const km = startKm + item.km;
+        const x = this.toScreenX(km);
         const grade = tracker.results.get(i);
         // 取ったものは消える。取り損ねたものは薄く残す
         if (!inView(x, 60) || itemIdx >= this.itemLabels.length || (grade && grade !== "MISS")) return;
         const alpha = grade === "MISS" ? 0.35 : 1;
-        const labelY = this.drawItem(r, item.kind, x, alpha);
+        const base = this.roadTop(km) + 26;
+        let labelY: number;
+        if (item.kind === "egg" && eggIdx < this.eggImages.length) {
+          // 黒たまごはふわふわ浮いている
+          const float = Math.sin(timeMs / 200 + i) * 4;
+          this.eggImages[eggIdx++].setPosition(x, base - 6 + float).setAlpha(alpha).setVisible(true);
+          labelY = base - 44;
+        } else {
+          labelY = this.drawItem(g, item.kind, x, base, alpha);
+        }
         this.itemLabels[itemIdx++]
           .setText(ITEM_NAMES[item.kind])
           .setBackgroundColor(ITEM_LABEL_COLORS[item.kind])
@@ -557,78 +829,156 @@ export class RunScene extends Phaser.Scene {
           .setVisible(true);
       });
 
-      const postX = toScreenX(endKm);
+      // 中継所・ゴール
+      const postX = this.toScreenX(endKm);
       if (inView(postX, 100) && postIdx < this.postLabels.length) {
         const isGoal = s === stageSections[stageSections.length - 1];
-        this.postLabels[postIdx++].setText(isGoal ? `${s.to} ゴール` : `${s.to}中継所`).setX(postX).setVisible(true);
-        r.fillStyle(0xffffff).fillRect(postX - 3, GROUND_Y + 20, 6, 120);
-        r.fillStyle(0x7a3b2e).fillRect(postX - 70, GROUND_Y - 150, 6, 150);
-        r.fillRect(postX + 64, GROUND_Y - 150, 6, 150);
+        const top = this.roadTop(endKm);
+        this.postLabels[postIdx++].setText(isGoal ? `${s.to} ゴール` : `${s.to}中継所`).setPosition(postX, top - 104).setVisible(true);
+        // 中継線（ゴールは市松模様）
+        if (isGoal) {
+          for (let yy = top + 22; yy < top + 128; yy += 10) {
+            g.fillStyle(((yy - top) / 10) % 2 < 1 ? 0xffffff : 0x222222, 1).fillRect(postX - 6, yy, 6, 10);
+            g.fillStyle(((yy - top) / 10) % 2 < 1 ? 0x222222 : 0xffffff, 1).fillRect(postX, yy, 6, 10);
+          }
+        } else {
+          g.fillStyle(0xffffff, 1).fillRect(postX - 3, top + 22, 6, 106);
+        }
+        // 看板の柱
+        g.fillStyle(0x7a3b2e, 1).fillRect(postX - 70, top - 104, 6, 126).fillRect(postX + 64, top - 104, 6, 126);
+        // ゴールテープ
+        if (isGoal) {
+          const tapeY = top + 6;
+          if (!this.goalTapeBroken) {
+            g.fillStyle(0xffffff, 1).fillRect(postX - 64, tapeY, 128, 4);
+            g.fillStyle(0xe74c3c, 1).fillRect(postX - 64, tapeY + 4, 128, 3);
+          } else {
+            // 切れて垂れ下がったテープ
+            g.lineStyle(4, 0xe74c3c, 1);
+            g.lineBetween(postX - 64, tapeY, postX - 40, tapeY + 34);
+            g.lineBetween(postX + 64, tapeY, postX + 40, tapeY + 34);
+          }
+        }
+      }
+
+      // 日本橋（ラストスパートの始まり）
+      const spurt = spurtZoneOf(s.no);
+      if (spurt) {
+        const km = startKm + spurt.fromKm;
+        const x = this.toScreenX(km);
+        if (inView(x, 120)) {
+          const top = this.roadTop(km);
+          g.fillStyle(0x8d7b68, 1).fillRect(x - 80, top + 4, 160, 10);
+          g.fillStyle(0x6f6052, 1).fillRect(x - 76, top + 14, 10, 14).fillRect(x + 66, top + 14, 10, 14);
+          // 欄干の柱飾り
+          g.fillStyle(0x3d6b4f, 1).fillRect(x - 82, top - 18, 8, 22).fillRect(x + 74, top - 18, 8, 22);
+          this.landmarkLabel.setText(`${spurt.landmark}  ラストスパート！`).setPosition(x, top - 24).setVisible(true);
+        } else {
+          this.landmarkLabel.setVisible(false);
+        }
       }
       startKm = endKm;
     }
+    if (!stageSections.some((s) => spurtZoneOf(s.no))) this.landmarkLabel.setVisible(false);
     for (let i = labelIdx; i < this.kmLabels.length; i++) this.kmLabels[i].setVisible(false);
     for (let i = postIdx; i < this.postLabels.length; i++) this.postLabels[i].setVisible(false);
     for (let i = itemIdx; i < this.itemLabels.length; i++) this.itemLabels[i].setVisible(false);
+    for (let i = eggIdx; i < this.eggImages.length; i++) this.eggImages[i].setVisible(false);
   }
 
-  /**
-   * 7区の日差しが強い区間（空を黄色く）と、10区のラストスパートの目印（日本橋）の看板。
-   * 日本橋の画面上の x を返す（見えなければ null）
-   */
-  private drawZones(g: Phaser.GameObjects.Graphics, toScreenX: (worldKm: number) => number): number | null {
+  /** 給水所と応援の旗を描く。看板を置く y を返す */
+  private drawItem(g: Phaser.GameObjects.Graphics, kind: ItemKind, x: number, base: number, alpha: number): number {
+    if (kind === "water") {
+      // 給水所の机（白いテーブルクロス）とコップ
+      g.fillStyle(0x2e86de, alpha).fillRect(x - 24, base - 30, 48, 30);
+      g.fillStyle(0xffffff, alpha).fillRect(x - 26, base - 34, 52, 8);
+      g.fillStyle(0xffffff, alpha).fillRect(x - 16, base - 46, 9, 12).fillRect(x + 7, base - 46, 9, 12);
+      g.fillStyle(0x4aa3ff, alpha).fillRect(x - 14, base - 44, 5, 4).fillRect(x + 9, base - 44, 5, 4);
+      return base - 50;
+    }
+    // 応援の旗（風になびく）
+    g.fillStyle(0x7a3b2e, alpha).fillRect(x - 2, base - 96, 4, 96);
+    g.fillStyle(0xe67e22, alpha).fillTriangle(x + 2 * this.dir, base - 96, x + 2 * this.dir, base - 64, x + 44 * this.dir, base - 80);
+    return base - 102;
+  }
+
+  /** 中継所で待つ次の走者と、渡し終えて残る前の走者 */
+  private drawOtherRunners(timeMs: number): void {
+    // 次の走者：中継線の少し先で、手を振って待っている
+    const next = this.nextRunner;
+    if (!this.race.isStageLastSection) {
+      const km = this.sectionStartWorldKm(this.section.no) + this.section.distanceKm + 30 / this.pxPerKm;
+      const x = this.toScreenX(km);
+      const visible = x > -60 && x < GAME_WIDTH + 60;
+      next.setVisible(visible);
+      if (visible) {
+        // 走ってくる仲間のほうを向き、手を振る
+        next
+          .setPosition(x, this.laneY(km))
+          .setFlipX(this.dir === 1)
+          .setFrame(Math.floor(timeMs / 280) % 2 === 0 ? "wave" : "stand");
+      }
+    } else {
+      next.setVisible(false);
+    }
+
+    // 前の走者：中継所でゆっくり歩き、だんだん消える
+    const prev = this.prevRunner;
+    if (this.prevRunnerKm === null) {
+      prev.setVisible(false);
+      return;
+    }
+    const elapsed = performance.now() - this.prevRunnerAt;
+    if (elapsed > 3000) {
+      this.prevRunnerKm = null;
+      prev.setVisible(false);
+      return;
+    }
+    const km = this.prevRunnerKm + (Math.min(elapsed, 1200) / 1000) * (60 / this.pxPerKm);
+    prev
+      .setVisible(true)
+      .setPosition(this.toScreenX(km), this.laneY(km))
+      .setFlipX(this.dir === -1)
+      .setAlpha(1 - elapsed / 3000);
+    if (elapsed > 600) {
+      prev.anims.stop();
+      prev.setFrame(Math.floor(timeMs / 300) % 2 === 0 ? "wave" : "stand");
+    } else if (!prev.anims.isPlaying) {
+      prev.play("run");
+      prev.anims.timeScale = 0.6;
+    }
+  }
+
+  /** 7区の日差しが強い区間（空を黄色く、太陽を出す） */
+  private drawZones(): void {
+    const g = this.zoneGfx;
+    g.clear();
     let startKm = 0;
     let zoneLabelX: number | null = null;
-    let landmarkX: number | null = null;
-    let landmarkText = "";
+    let sunAlpha = 0;
     for (const s of sectionsOfStage(this.race.stage)) {
       const sunny = sunnyZoneOf(s.no);
       if (sunny) {
-        const a = toScreenX(startKm + sunny.fromKm);
-        const b = toScreenX(startKm + sunny.toKm);
+        const a = this.toScreenX(startKm + sunny.fromKm);
+        const b = this.toScreenX(startKm + sunny.toKm);
         const left = Math.max(0, Math.min(a, b));
         const right = Math.min(GAME_WIDTH, Math.max(a, b));
         if (right > left) {
-          g.fillStyle(0xffe58a, 0.55).fillRect(left, 0, right - left, GROUND_Y);
+          g.fillStyle(0xffd75e, 0.32).fillRect(left, 0, right - left, GAME_HEIGHT);
           // 看板は、画面に見えている日差しの区間の真ん中に出す
           zoneLabelX = (left + right) / 2;
-        }
-      }
-      const spurt = spurtZoneOf(s.no);
-      if (spurt) {
-        const x = toScreenX(startKm + spurt.fromKm);
-        if (x > -100 && x < GAME_WIDTH + 100) {
-          landmarkX = x;
-          landmarkText = `${spurt.landmark}  ラストスパート！`;
+          sunAlpha = (right - left) / GAME_WIDTH;
         }
       }
       startKm += s.distanceKm;
     }
+    this.background.sun.setAlpha(sunAlpha);
     this.zoneLabel.setVisible(zoneLabelX !== null);
-    if (zoneLabelX !== null) this.zoneLabel.setX(zoneLabelX).setText(`日差しが強い  給水×${SCORE_CONFIG.sunnyWaterMultiplier}`);
-    this.landmarkLabel.setVisible(landmarkX !== null);
-    if (landmarkX !== null) this.landmarkLabel.setX(landmarkX).setText(landmarkText);
-    return landmarkX;
-  }
-
-  /** アイテムの目印を描く（キャラと同じく仮の図形）。看板を置く y を返す */
-  private drawItem(g: Phaser.GameObjects.Graphics, kind: ItemKind, x: number, alpha: number): number {
-    if (kind === "water") {
-      // 給水所の机とコップ
-      g.fillStyle(0x2e86de, alpha).fillRect(x - 20, GROUND_Y - 34, 40, 34);
-      g.fillStyle(0xffffff, alpha).fillRect(x - 14, GROUND_Y - 46, 8, 12).fillRect(x + 6, GROUND_Y - 46, 8, 12);
-      return GROUND_Y - 52;
+    if (zoneLabelX !== null) {
+      this.zoneLabel
+        .setText(`日差しが強い  給水×${SCORE_CONFIG.sunnyWaterMultiplier}`)
+        .setPosition(zoneLabelX, this.roadTop(this.worldKmAt(zoneLabelX)) - 120);
     }
-    if (kind === "cheer") {
-      // 応援の旗
-      g.fillStyle(0x7a3b2e, alpha).fillRect(x - 2, GROUND_Y - 96, 4, 96);
-      g.fillStyle(0xe67e22, alpha).fillTriangle(x + 2, GROUND_Y - 96, x + 2, GROUND_Y - 66, x + 40 * this.dir, GROUND_Y - 81);
-      return GROUND_Y - 102;
-    }
-    // 黒たまご
-    g.fillStyle(0x111111, alpha).fillEllipse(x, GROUND_Y - 16, 26, 32);
-    g.fillStyle(0xffffff, alpha * 0.5).fillEllipse(x - 5, GROUND_Y - 24, 6, 9);
-    return GROUND_Y - 38;
   }
 
   /** タイミングゲージ（襷・アイテム共通）：中央の線が目印。マーカーが線に重なった瞬間にエンター */
@@ -645,7 +995,8 @@ export class RunScene extends Phaser.Scene {
     const y = 94;
     const half = 150;
     const scale = half / RELAY_GAUGE_PX;
-    g.fillStyle(0xffffff, 0.85).fillRect(cx - half, y, half * 2, 16);
+    g.fillStyle(0x10243e, 0.35).fillRoundedRect(cx - half - 6, y - 10, half * 2 + 12, 36, 8);
+    g.fillStyle(0xffffff, 0.95).fillRect(cx - half, y, half * 2, 16);
     const good = target.goodPx * scale;
     const perfect = target.perfectPx * scale;
     g.fillStyle(0x7fd67f).fillRect(cx - good, y, good * 2, 16);
@@ -657,8 +1008,7 @@ export class RunScene extends Phaser.Scene {
   }
 
   private drawHud(now: number): void {
-    const elapsed =
-      this.state === "ready" ? 0 : (this.state === "arrived" ? this.arrivedAt : now) - this.startedAt;
+    const elapsed = this.state === "ready" ? 0 : (this.state === "arrived" ? this.arrivedAt : now) - this.startedAt;
     // 総合タイム：記録済みの区間 + 今の区間（着いた後は記録済みに含まれる）
     const total = this.race.totalMs() + (this.state === "running" ? elapsed : 0);
     const remain = Math.max(0, this.section.distanceKm - this.runner.distanceKm);
@@ -677,18 +1027,51 @@ export class RunScene extends Phaser.Scene {
       }`,
     ]);
 
-    // ポイント
+    // ポイント。増えたら弾ませて「+N」を出す
     const points = this.race.breakdown().total;
     this.pointsText.setText(`${points.toLocaleString()} pt`);
+    if (points > this.lastPoints) {
+      const gained = points - this.lastPoints;
+      this.tweens.killTweensOf([this.pointsText, this.plusText]);
+      this.pointsText.setScale(1.18);
+      this.tweens.add({ targets: this.pointsText, scale: 1, duration: 220, ease: "Quad.Out" });
+      // 「+N」はポイントの左に出す
+      this.plusText
+        .setText(`+${gained.toLocaleString()}`)
+        // 弾んで大きくなったポイントの表示に重ならないよう、拡大後の幅ぶん離す
+        .setPosition(GAME_WIDTH - 24 - this.pointsText.width * 1.2 - 14, 86)
+        .setAlpha(1)
+        .setVisible(true);
+      this.tweens.add({ targets: this.plusText, y: 74, alpha: 0, delay: 300, duration: 500 });
+    }
+    this.lastPoints = points;
+
     const mult = sectionMultiplier(this.section.no, SCORE_CONFIG);
-    this.comboText.setText(
-      [
-        `コンボ ${this.combo.combo}  リズム×${this.combo.multiplier.toFixed(1)}`,
-        mult !== 1 ? `${this.section.no}区はポイント×${mult}` : "",
-        this.slopeBonusLabel() || this.specialLabel(),
-      ].join("\n"),
-    );
+    const comboLines = [
+      `コンボ ${this.combo.combo}  リズム×${this.combo.multiplier.toFixed(1)}`,
+      mult !== 1 ? `${this.section.no}区はポイント×${mult}` : "",
+      this.slopeBonusLabel() || this.specialLabel(),
+    ].filter((l) => l !== "");
+    this.comboText.setText(comboLines.join("\n"));
     this.drawRelayGauge();
+
+    // HUD の下地（背景の上でも文字が読めるように）
+    const panel = this.hudPanel;
+    panel.clear();
+    panel.fillStyle(0xffffff, 0.72);
+    panel.fillRoundedRect(12, 6, Math.max(this.sectionTitle.width, this.hud.width) + 26, this.hud.y + this.hud.height - 2, 10);
+    const rightW = Math.max(336, this.comboText.width + 26);
+    panel.fillRoundedRect(GAME_WIDTH - rightW - 10, 4, rightW, this.comboText.y + this.comboText.height + 6, 10);
+
+    // 中央のメッセージの下地
+    const mp = this.messagePanel;
+    mp.clear();
+    if (this.centerText.visible) {
+      const w = Math.max(this.centerText.width * this.centerText.scaleX, this.subText.visible ? this.subText.width : 0) + 60;
+      const top = this.titleText.visible ? this.titleText.y - 40 : this.centerText.y - 34;
+      const bottom = this.subText.visible ? this.subText.y + 22 : this.centerText.y + 30;
+      mp.fillStyle(0xffffff, 0.6).fillRoundedRect(GAME_WIDTH / 2 - w / 2, top, w, bottom - top, 14);
+    }
 
     // 高低図（進捗バーを兼ねる）
     const p = this.progressBar;
@@ -698,7 +1081,7 @@ export class RunScene extends Phaser.Scene {
     this.drawProfile(p, x, 8, w, 34);
 
     // 押す間隔ゲージ：前回の連打からの経過時間。赤（早すぎ）を抜けて緑になってから押す
-    // 下り坂では赤（押しすぎ）の範囲が広がる
+    // 下り坂では赤（押しすぎ）の範囲が広がる。ラストスパート中は全部緑
     const gy = 52;
     const fallMs = this.runner.fallIntervalMs;
     const gaugeMaxMs = Math.max(RUN_CONFIG.fallIntervalMs * 2, RUN_CONFIG.justIntervalMs * 1.5, fallMs * 1.3);
@@ -723,19 +1106,20 @@ export class RunScene extends Phaser.Scene {
 
   private showSlopeEvent(e: SlopeBonusEvent): void {
     if (e.kind === "summit") {
-      this.showPop(e.cleared ? `最高地点 到達！  +${e.points}` : "最高地点 到達（勢い不足）", e.cleared ? "#2e9e4f" : "#7a7a7a");
+      this.effects.bigText(
+        e.cleared ? `最高地点 到達！  +${e.points}` : "最高地点 到達（勢い不足）",
+        GAME_WIDTH / 2,
+        186,
+        e.cleared ? "#2e9e4f" : "#7a7a7a",
+        34,
+      );
+      if (e.cleared) this.effects.confetti(this.runnerX, this.laneY(this.runnerWorldKm) - 100, 50);
       return;
     }
     // 区切りごとの結果はランナーの頭の上に小さく出す
     const text = e.cleared ? `${e.index}/${e.total} クリア +${e.points}` : `${e.index}/${e.total} 勢い不足`;
     this.showSmallPop(text, e.cleared ? "#2e9e4f" : "#7a7a7a");
-  }
-
-  /** ランナーの頭の上に小さく出して消える表示 */
-  private showSmallPop(text: string, color: string): void {
-    this.tweens.killTweensOf(this.slopeText);
-    this.slopeText.setText(text).setColor(color).setPosition(this.runnerX, GROUND_Y - 80).setAlpha(1).setVisible(true);
-    this.tweens.add({ targets: this.slopeText, y: GROUND_Y - 110, alpha: 0, duration: 700, delay: 200 });
+    if (e.cleared) this.effects.sparkle(this.runnerX, this.laneY(this.runnerWorldKm) - 60, 8, 0x7fd67f);
   }
 
   /** 7区の日差し・10区のラストスパートの表示（その区間以外では空） */
@@ -752,7 +1136,7 @@ export class RunScene extends Phaser.Scene {
       if (km < spurt.fromKm) return `${spurt.landmark}（${spurt.fromKm}km）からラストスパート`;
       const avg = this.lastSpurt.average ?? 0;
       const est = this.lastSpurt.bonus(RUN_CONFIG, SCORE_CONFIG);
-      return `ラストスパート！ 押しすぎOK  勢い ${Math.round(avg * 100)}%  +${est}見込み`;
+      return `ラストスパート！ 勢い ${Math.round(avg * 100)}%  +${est}見込み`;
     }
     return "";
   }
@@ -800,7 +1184,7 @@ export class RunScene extends Phaser.Scene {
     const toX = (km: number) => (this.dir === 1 ? x + (w * km) / dist : x + w - (w * km) / dist);
     const toY = (m: number) => y + h - 3 - ((m - min) / span) * (h - 6);
 
-    g.fillStyle(0xffffff, 0.8).fillRoundedRect(x - 4, y - 2, w + 8, h + 4, 6);
+    g.fillStyle(0xffffff, 0.9).fillRoundedRect(x - 4, y - 2, w + 8, h + 4, 6);
     const ran = this.runner.distanceKm;
     const area = (fromKm: number, toKm: number, color: number) => {
       const pts = [new Phaser.Math.Vector2(toX(fromKm), y + h)];
