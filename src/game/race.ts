@@ -131,6 +131,11 @@ export class Race {
     this.currentScore.spurt = points;
   }
 
+  /** 今の区間のラストスパートのポイントに足す（連打1回ごとのポイントや、ゴール時のボーナス） */
+  addSpurt(points: number): void {
+    this.currentScore.spurt += points;
+  }
+
   /** 今の区間に給水・応援・黒たまごの結果を足す */
   addItem(points: number, got: boolean): void {
     const s = this.currentScore;

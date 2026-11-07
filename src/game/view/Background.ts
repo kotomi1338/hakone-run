@@ -19,6 +19,19 @@ const FUJI_FACTOR = 0.015;
 const FAR_FACTOR = 0.08;
 const MID_FACTOR = 0.3;
 const MID_SLOT_PX = 70;
+/** 中景でランナーの真後ろに来る画面上の x（往路で計算した値） */
+const MID_RUNNER_X = 240;
+/** 小田原の梅丸（public/umemaru.webp）。画像の足元は上から 82% のところ */
+const UMEMARU_KEY = "umemaru";
+const UMEMARU_FOOT = 0.82;
+const UMEMARU_HEIGHT_PX = 170;
+/** 中継所でランナーや「中継所」の看板に隠れないよう、少し先に立たせる（中景の画面上の px） */
+const UMEMARU_AHEAD_PX = 150;
+
+/** 背景で使う画像を読み込む（シーンの preload で呼ぶ）。ファイルがなければ出さないだけ */
+export function preloadBackground(scene: Phaser.Scene): void {
+  if (!scene.textures.exists(UMEMARU_KEY)) scene.load.image(UMEMARU_KEY, "/umemaru.webp");
+}
 
 /** 整数から 0〜1 の決まった値（毎回同じ景色になるように乱数は使わない） */
 function hash(n: number): number {
@@ -36,6 +49,7 @@ export class Background {
   private readonly far: Phaser.GameObjects.Graphics;
   private readonly mid: Phaser.GameObjects.Graphics;
   private readonly trees: Phaser.GameObjects.Image[];
+  private readonly umemaru: Phaser.GameObjects.Image | null;
 
   /** baseY は中景の地面の高さ（道路の基準の高さ） */
   constructor(scene: Phaser.Scene, dir: 1 | -1, baseY: number) {
@@ -51,6 +65,10 @@ export class Background {
     this.far = scene.add.graphics();
     this.mid = scene.add.graphics();
     this.trees = Array.from({ length: 24 }, () => scene.add.image(0, 0, "tree").setOrigin(0.5, 1).setVisible(false));
+    this.umemaru = scene.textures.exists(UMEMARU_KEY)
+      ? scene.add.image(0, baseY + 10, UMEMARU_KEY).setOrigin(0.5, UMEMARU_FOOT).setVisible(false)
+      : null;
+    if (this.umemaru) this.umemaru.setScale(UMEMARU_HEIGHT_PX / this.umemaru.height);
   }
 
   /** 右向きで計算した x を、復路なら左右反転する */
@@ -61,8 +79,9 @@ export class Background {
   /**
    * 毎フレーム呼ぶ。offsetPx はステージのスタートからランナーまでの距離（ピクセル）。
    * sceneryAt(offsetPx) は、その位置の景色（中景がどの区間の景色か）
+   * odawaraPx はステージのスタートから小田原中継所までの距離（ピクセル）。そこに梅丸が立っている
    */
-  update(offsetPx: number, sceneryAt: (offsetPx: number) => Scenery, timeMs: number): void {
+  update(offsetPx: number, sceneryAt: (offsetPx: number) => Scenery, timeMs: number, odawaraPx: number | null = null): void {
     // 雲：ごくゆっくり流れ、さらに風で少しずつ動く
     const wrap = GAME_WIDTH + 300;
     this.clouds.forEach((c, i) => {
@@ -77,6 +96,19 @@ export class Background {
 
     this.drawFar(offsetPx);
     this.drawMid(offsetPx, sceneryAt);
+    this.drawUmemaru(offsetPx, odawaraPx);
+  }
+
+  /** 小田原中継所の後ろ（中景）に梅丸を立たせる。中景と同じ速さで流れる */
+  private drawUmemaru(offsetPx: number, odawaraPx: number | null): void {
+    if (!this.umemaru) return;
+    if (odawaraPx === null) {
+      this.umemaru.setVisible(false);
+      return;
+    }
+    const x = MID_RUNNER_X + UMEMARU_AHEAD_PX + (odawaraPx - offsetPx) * MID_FACTOR;
+    const half = this.umemaru.displayWidth / 2;
+    this.umemaru.setX(this.mx(x)).setVisible(x > -half && x < GAME_WIDTH + half);
   }
 
   /** 遠くの山並み（青みがかったシルエット） */

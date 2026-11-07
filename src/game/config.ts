@@ -161,6 +161,8 @@ export interface ScoreConfig {
   sunnyWaterMultiplier: number;
   /** 10区：ラストスパートの平均の勢いがダッシュの上限なら満額もらえるボーナス */
   spurtBonus: number;
+  /** 10区：ラストスパートの区間で連打1回ごとにもらえるポイント */
+  spurtPointsPerTap: number;
   /** 6区以降に獲得したポイントの倍率 */
   secondStageMultiplier: number;
 }

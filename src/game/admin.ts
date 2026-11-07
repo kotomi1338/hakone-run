@@ -145,7 +145,8 @@ export function setupAdmin(game: Phaser.Game): () => void {
   scoring.add(SCORE_CONFIG, "cheerPoints", 0, 2000, 10).name("応援(pt)");
   scoring.add(SCORE_CONFIG, "eggPoints", 0, 5000, 10).name("黒たまご(pt)");
   scoring.add(SCORE_CONFIG, "sunnyWaterMultiplier", 1, 5, 0.1).name("7区 日差し給水の倍率");
-  scoring.add(SCORE_CONFIG, "spurtBonus", 0, 10000, 50).name("10区 ラストスパート(pt)");
+  scoring.add(SCORE_CONFIG, "spurtBonus", 0, 10000, 50).name("10区 ラストスパート勢いボーナス(pt)");
+  scoring.add(SCORE_CONFIG, "spurtPointsPerTap", 0, 100, 1).name("10区 ラストスパート連打1回(pt)");
   scoring.add(SCORE_CONFIG, "fullRelayBonus", 0, 20000, 100).name("全区間ボーナス(pt)");
   scoring.add(SCORE_CONFIG, "secondStageMultiplier", 1, 3, 0.05).name("6区以降の倍率");
   scoring.close();

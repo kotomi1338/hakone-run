@@ -44,6 +44,7 @@
     "cheerPoints": 100,
     "eggPoints": 500,
     "sunnyWaterMultiplier": 2,
+    "spurtPointsPerTap": 10,
     "spurtBonus": 1500
   },
   "slope": {

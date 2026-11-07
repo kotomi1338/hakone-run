@@ -121,7 +121,7 @@ export class StageResultScene extends Phaser.Scene {
     if (canRegister) {
       this.showRankingForm();
     } else {
-      const hint = final ? "Enterで1区からもう一度（途中の区間から走った記録はランキングに登録できません）" : "Enterで復路（6区 芦ノ湖）スタート";
+      const hint = final ? "Enterで1区からもう一度（途中の区間から走った記録はランキングに登録できません）" : "Enterで復路（6区 芦ノ湖）へ";
       const hintText = this.add
         .text(GAME_WIDTH / 2, 466, hint, { fontFamily: FONT, fontSize: final ? "18px" : "22px", color: "#c0392b", fontStyle: "bold" })
         .setOrigin(0.5, 0);
@@ -146,7 +146,8 @@ export class StageResultScene extends Phaser.Scene {
         } else {
           playSe(this, "click");
           this.race.advance();
-          this.scene.start("RunScene", { race: this.race, autoStart: true } satisfies RunSceneData);
+          // 復路（6区）もスペースキー → カウントダウンでスタート
+          this.scene.start("RunScene", { race: this.race } satisfies RunSceneData);
         }
       },
     });

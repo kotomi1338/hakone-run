@@ -75,7 +75,7 @@ describe("アイテムの配置", () => {
   });
 
   it("給水と黒たまごの場所は毎回変わる（区間ごとに3パターン）", () => {
-    for (const s of SECTIONS) {
+    for (const s of SECTIONS.filter((s) => s.no !== 7)) {
       const waterSpots = new Set(layouts.map((l) => l[s.no].find((i) => i.kind === "water")!.km));
       expect(waterSpots.size).toBe(3);
     }
@@ -102,9 +102,10 @@ describe("アイテムの配置", () => {
     }
   });
 
-  it("7区には、どの配置でも日差しが強い区間（8〜16km）に給水がある", () => {
+  it("7区は、どの配置でも日差しが強い区間（8〜16km）に給水が2回（10km・14km で固定）", () => {
     for (const layout of layouts) {
-      expect(layout[7].some((i) => i.kind === "water" && i.km >= 8 && i.km <= 16)).toBe(true);
+      const waters = layout[7].filter((i) => i.kind === "water").map((i) => i.km);
+      expect(waters).toEqual([10, 14]);
     }
   });
 });

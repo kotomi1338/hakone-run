@@ -42,7 +42,7 @@ export default function HomePage() {
         <div ref={rootRef} className="game-root" />
         {loading && <p className="game-loading">読み込み中…</p>}
       </div>
-      <p className="game-help">スペース：連打で走る ／ エンター：もう一度</p>
+      <p className="game-help">スペース：連打で走る ／ エンター：襷・給水・応援・黒たまごを受け取る、次の画面へ</p>
     </main>
   );
 }

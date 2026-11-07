@@ -30,6 +30,7 @@ const score = {
   eggPoints: 500,
   sunnyWaterMultiplier: 2,
   spurtBonus: 1500,
+  spurtPointsPerTap: 10,
 } as ScoreConfig;
 const slope: SlopeConfig = {
   uphillSlowdownPerGrade: 0.05,

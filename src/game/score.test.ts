@@ -56,6 +56,7 @@ const score: ScoreConfig = {
   eggPoints: 500,
   sunnyWaterMultiplier: 2,
   spurtBonus: 1500,
+  spurtPointsPerTap: 10,
   fullRelayBonus: 2000,
   secondStageMultiplier: 1.2,
 };
@@ -198,6 +199,14 @@ describe("Race のポイント", () => {
     race.setRelay(0, "PERFECT");
     runSection(race);
     expect(race.breakdown().sections[0]).toMatchObject({ time: 1065, rhythm: 30, relay: 300, maxCombo: 3 });
+  });
+
+  it("ラストスパートは連打1回ごとのポイントとゴール時のボーナスを足していき、6区以降の倍率がかかる", () => {
+    const race = new Race(9, course, score);
+    for (let i = 0; i < 30; i++) race.addSpurt(10); // 連打30回
+    race.addSpurt(1000); // ゴール時のボーナス
+    runSection(race);
+    expect(race.breakdown().sections[0]).toMatchObject({ no: 10, spurt: 1300, multiplier: 1.2 });
   });
 
   it("襷の判定は1回だけ（後から上書きされない）", () => {
