@@ -1,16 +1,8 @@
-import { defineHandler, type InferProps } from "void";
-import { db, desc } from "void/db";
-import { messages } from "@schema";
-import { createInsertSchema } from "void/drizzle-zod";
+import { defineHead } from "void";
 
-export type Props = InferProps<typeof loader>;
+// Phaser はブラウザでしか動かないので、サーバーでは描画しない
+export const ssr = false;
 
-export const loader = defineHandler(async () => {
-  const rows = await db.select().from(messages).orderBy(desc(messages.id));
-  return { messages: rows };
-});
-export const action = defineHandler.withValidator({
-  body: createInsertSchema(messages, { text: schema => schema.trim().min(1).max(1000) }).pick({ text: true }),
-})(async (_c, { body }) => {
-  await db.insert(messages).values(body);
-});
+export const head = defineHead(() => ({
+  title: "箱根駅伝 連打ラン",
+}));
