@@ -6,7 +6,8 @@ import { Race, sectionsOfStage, STAGE_NAMES } from "./race";
 import { Runner } from "./runner";
 import { elevationAt, segmentAt } from "./terrain";
 import { SlopeBonus, type SlopeBonusEvent } from "./slopeBonus";
-import { ITEM_ACTIONS, ITEM_NAMES, ItemTracker, type ItemKind, type ItemResult } from "./items";
+import { isSunny, ITEM_ACTIONS, ITEM_NAMES, ItemTracker, sunnyZoneOf, type ItemKind, type ItemResult } from "./items";
+import { LastSpurt, spurtZoneOf } from "./spurt";
 import { judgeRelay, RhythmCombo, sectionMultiplier, type RelayGrade } from "./score";
 
 const GROUND_Y = 400;
@@ -70,6 +71,10 @@ export class RunScene extends Phaser.Scene {
   private relayMessageTimer?: Phaser.Time.TimerEvent;
   private combo!: RhythmCombo;
   private slopeBonus!: SlopeBonus;
+  private lastSpurt!: LastSpurt;
+  /** 7区「日差しが強い」・10区「日本橋」の看板 */
+  private zoneLabel!: Phaser.GameObjects.Text;
+  private landmarkLabel!: Phaser.GameObjects.Text;
   private slopeText!: Phaser.GameObjects.Text;
   private pointsText!: Phaser.GameObjects.Text;
   private comboText!: Phaser.GameObjects.Text;
@@ -96,6 +101,7 @@ export class RunScene extends Phaser.Scene {
     this.runner = new Runner(RUN_CONFIG, this.section);
     this.combo = new RhythmCombo(RUN_CONFIG, SCORE_CONFIG);
     this.slopeBonus = new SlopeBonus(this.section.no, SCORE_CONFIG);
+    this.lastSpurt = new LastSpurt(this.section.no);
     this.itemTrackers = new Map();
     // 管理画面のポイント内訳が今のレースを読めるようにする
     this.registry.set("race", this.race);
@@ -128,6 +134,28 @@ export class RunScene extends Phaser.Scene {
         .text(0, 0, "", { fontFamily: FONT, fontSize: "15px", color: "#ffffff", padding: { x: 6, y: 2 } })
         .setOrigin(0.5, 1),
     );
+    this.zoneLabel = this.add
+      .text(0, GROUND_Y - 120, "日差しが強い  給水×2", {
+        fontFamily: FONT,
+        fontSize: "18px",
+        color: "#b35c00",
+        fontStyle: "bold",
+        backgroundColor: "#fff3c4",
+        padding: { x: 8, y: 3 },
+      })
+      .setOrigin(0.5, 1)
+      .setVisible(false);
+    this.landmarkLabel = this.add
+      .text(0, GROUND_Y - 70, "", {
+        fontFamily: FONT,
+        fontSize: "20px",
+        color: "#ffffff",
+        fontStyle: "bold",
+        backgroundColor: "#8e44ad",
+        padding: { x: 8, y: 3 },
+      })
+      .setOrigin(0.5, 1)
+      .setVisible(false);
 
     this.runnerRect = this.add
       .rectangle(this.runnerX, GROUND_Y, RUNNER_SIZE, RUNNER_SIZE, 0x1e5bd8)
@@ -333,7 +361,8 @@ export class RunScene extends Phaser.Scene {
       return;
     }
     const mult = sectionMultiplier(this.section.no, SCORE_CONFIG);
-    this.showPop(`${name} ${result.grade}!  +${Math.round(result.points * mult)}`, RELAY_GRADE_COLORS[result.grade]);
+    const label = result.sunny ? `日差し${name}×${SCORE_CONFIG.sunnyWaterMultiplier}` : name;
+    this.showPop(`${label} ${result.grade}!  +${Math.round(result.points * mult)}`, RELAY_GRADE_COLORS[result.grade]);
   }
 
   private judge(index: number, grade: RelayGrade): void {
@@ -370,6 +399,7 @@ export class RunScene extends Phaser.Scene {
     if (this.state === "running") {
       this.runner.update(now, delta);
       this.updateSlopeBonus(now, delta);
+      this.lastSpurt.update(this.runner.distanceKm, this.runner.isFallen(now) ? 0 : this.runner.speedRatio, delta);
       if (this.runner.finished) {
         if (this.race.isStageLastSection) this.arrive(now);
         else this.relay(now);
@@ -408,6 +438,7 @@ export class RunScene extends Phaser.Scene {
     this.section = this.race.section;
     this.runner.handOver(this.section);
     this.slopeBonus = new SlopeBonus(this.section.no, SCORE_CONFIG);
+    this.lastSpurt = new LastSpurt(this.section.no);
     this.startedAt = now;
     this.ranPrev = true;
     this.updateSectionTitle();
@@ -431,6 +462,12 @@ export class RunScene extends Phaser.Scene {
     const time = this.arrivedAt - this.startedAt;
     this.race.recordSection(time);
     this.relayMessageTimer?.remove();
+    if (this.lastSpurt.zone) {
+      const bonus = this.lastSpurt.bonus(RUN_CONFIG, SCORE_CONFIG);
+      this.race.setSpurt(bonus);
+      const mult = sectionMultiplier(this.section.no, SCORE_CONFIG);
+      this.showPop(`ラストスパート  +${Math.round(bonus * mult)}`, "#8e44ad");
+    }
 
     const label = this.race.stage === 1 ? "往路ゴール！" : "総合ゴール！";
     this.centerText.setText(`${this.section.to} ${label}`).setVisible(true);
@@ -456,6 +493,7 @@ export class RunScene extends Phaser.Scene {
     // 遠景のビル（ゆっくり流れる）
     const g = this.bg;
     g.clear();
+    const landmarkX = this.drawZones(g, toScreenX);
     const farOffset = offsetPx * 0.25;
     const bw = 90;
     const first = Math.floor(farOffset / bw);
@@ -479,6 +517,12 @@ export class RunScene extends Phaser.Scene {
     r.fillStyle(0xf5f5f5);
     for (let i = firstDash; i < firstDash + GAME_WIDTH / dash + 2; i++) {
       r.fillRect(this.mx(i * dash - offsetPx, dash / 2), GROUND_Y + 66, dash / 2, 6);
+    }
+
+    // 日本橋（仮の図形）：欄干と橋脚
+    if (landmarkX !== null) {
+      r.fillStyle(0x7f8c8d).fillRect(landmarkX - 70, GROUND_Y - 24, 140, 8);
+      r.fillRect(landmarkX - 66, GROUND_Y - 16, 8, 16).fillRect(landmarkX + 58, GROUND_Y - 16, 8, 16);
     }
 
     // 距離表示（各区間のスタートからの km）と、中継所・ゴール
@@ -526,6 +570,45 @@ export class RunScene extends Phaser.Scene {
     for (let i = labelIdx; i < this.kmLabels.length; i++) this.kmLabels[i].setVisible(false);
     for (let i = postIdx; i < this.postLabels.length; i++) this.postLabels[i].setVisible(false);
     for (let i = itemIdx; i < this.itemLabels.length; i++) this.itemLabels[i].setVisible(false);
+  }
+
+  /**
+   * 7区の日差しが強い区間（空を黄色く）と、10区のラストスパートの目印（日本橋）の看板。
+   * 日本橋の画面上の x を返す（見えなければ null）
+   */
+  private drawZones(g: Phaser.GameObjects.Graphics, toScreenX: (worldKm: number) => number): number | null {
+    let startKm = 0;
+    let zoneLabelX: number | null = null;
+    let landmarkX: number | null = null;
+    let landmarkText = "";
+    for (const s of sectionsOfStage(this.race.stage)) {
+      const sunny = sunnyZoneOf(s.no);
+      if (sunny) {
+        const a = toScreenX(startKm + sunny.fromKm);
+        const b = toScreenX(startKm + sunny.toKm);
+        const left = Math.max(0, Math.min(a, b));
+        const right = Math.min(GAME_WIDTH, Math.max(a, b));
+        if (right > left) {
+          g.fillStyle(0xffe58a, 0.55).fillRect(left, 0, right - left, GROUND_Y);
+          // 看板は、画面に見えている日差しの区間の真ん中に出す
+          zoneLabelX = (left + right) / 2;
+        }
+      }
+      const spurt = spurtZoneOf(s.no);
+      if (spurt) {
+        const x = toScreenX(startKm + spurt.fromKm);
+        if (x > -100 && x < GAME_WIDTH + 100) {
+          landmarkX = x;
+          landmarkText = `${spurt.landmark}  ラストスパート！`;
+        }
+      }
+      startKm += s.distanceKm;
+    }
+    this.zoneLabel.setVisible(zoneLabelX !== null);
+    if (zoneLabelX !== null) this.zoneLabel.setX(zoneLabelX).setText(`日差しが強い  給水×${SCORE_CONFIG.sunnyWaterMultiplier}`);
+    this.landmarkLabel.setVisible(landmarkX !== null);
+    if (landmarkX !== null) this.landmarkLabel.setX(landmarkX).setText(landmarkText);
+    return landmarkX;
   }
 
   /** アイテムの目印を描く（キャラと同じく仮の図形）。看板を置く y を返す */
@@ -602,7 +685,7 @@ export class RunScene extends Phaser.Scene {
       [
         `コンボ ${this.combo.combo}  リズム×${this.combo.multiplier.toFixed(1)}`,
         mult !== 1 ? `${this.section.no}区はポイント×${mult}` : "",
-        this.slopeBonusLabel(),
+        this.slopeBonusLabel() || this.specialLabel(),
       ].join("\n"),
     );
     this.drawRelayGauge();
@@ -653,6 +736,25 @@ export class RunScene extends Phaser.Scene {
     this.tweens.killTweensOf(this.slopeText);
     this.slopeText.setText(text).setColor(color).setPosition(this.runnerX, GROUND_Y - 80).setAlpha(1).setVisible(true);
     this.tweens.add({ targets: this.slopeText, y: GROUND_Y - 110, alpha: 0, duration: 700, delay: 200 });
+  }
+
+  /** 7区の日差し・10区のラストスパートの表示（その区間以外では空） */
+  private specialLabel(): string {
+    const km = this.runner.distanceKm;
+    const sunny = sunnyZoneOf(this.section.no);
+    if (sunny) {
+      if (km < sunny.fromKm) return `この先 日差しが強い区間：給水ポイント×${SCORE_CONFIG.sunnyWaterMultiplier}`;
+      if (isSunny(this.section.no, km)) return `日差しが強い！ 給水ポイント×${SCORE_CONFIG.sunnyWaterMultiplier}`;
+      return "";
+    }
+    const spurt = this.lastSpurt.zone;
+    if (spurt) {
+      if (km < spurt.fromKm) return `${spurt.landmark}（${spurt.fromKm}km）からラストスパート`;
+      const avg = this.lastSpurt.average ?? 0;
+      const est = this.lastSpurt.bonus(RUN_CONFIG, SCORE_CONFIG);
+      return `ラストスパート！ 押しすぎOK  勢い ${Math.round(avg * 100)}%  +${est}見込み`;
+    }
+    return "";
   }
 
   /** 坂ボーナスの進み具合（坂ボーナスのない区間では空） */

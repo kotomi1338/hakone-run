@@ -1,6 +1,7 @@
 // 連打 → 速度 → 距離 の計算。画面（Phaser）に依存しない純粋なロジック。
 
 import { COURSE_CONFIG, SLOPE_CONFIG, type CourseConfig, type RunConfig, type SectionConfig, type SlopeConfig } from "./config";
+import { inSpurt } from "./spurt";
 import { fallIntervalExtraMs, gradeAt, slopeFactor } from "./terrain";
 
 /** 直近 windowMs の連打を記録して、1秒あたりの連打回数を出す */
@@ -104,8 +105,14 @@ export class Runner {
     return this.speedRatio * slopeFactor(this.grade, this.slope);
   }
 
-  /** 今いる地点で「押しすぎ」になる間隔（ミリ秒）。下り坂では長くなる */
+  /** 10区のラストスパート中か（押しすぎで転ばず、最高速度を超えてダッシュできる） */
+  get inSpurt(): boolean {
+    return inSpurt(this.section.no, this.distanceKm);
+  }
+
+  /** 今いる地点で「押しすぎ」になる間隔（ミリ秒）。下り坂では長くなり、ラストスパート中は 0（押しすぎなし） */
   get fallIntervalMs(): number {
+    if (this.inSpurt) return 0;
     return this.config.fallIntervalMs + fallIntervalExtraMs(this.grade, this.slope);
   }
 
@@ -163,7 +170,9 @@ export class Runner {
 
     // optimalRate で連打し続けたときの勢いを最高速度とする
     const optimalMomentum = (this.config.optimalRate * this.config.momentumMs) / 1000 / 2;
-    const target = Math.min(this.meter.momentum(now) / optimalMomentum, 1);
+    // ふだんは最高速度（1）で頭打ち。ラストスパート中は速く連打するほど上限（spurtMaxSpeed）まで伸びる
+    const cap = this.inSpurt ? this.config.spurtMaxSpeed : 1;
+    const target = Math.min(this.meter.momentum(now) / optimalMomentum, cap);
     const t = Math.min(1, dtMs / this.config.speedSmoothingMs);
     this.speedRatio += (target - this.speedRatio) * t;
 

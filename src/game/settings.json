@@ -11,7 +11,8 @@
     "fallStreak": 4,
     "fallDurationMs": 300,
     "maxRate": 10,
-    "speedSmoothingMs": 200
+    "speedSmoothingMs": 200,
+    "spurtMaxSpeed": 1.5
   },
   "score": {
     "timePointsPerKm": 50,
@@ -36,7 +37,9 @@
     "itemGoodRatio": 0.5,
     "waterPoints": 150,
     "cheerPoints": 100,
-    "eggPoints": 500
+    "eggPoints": 500,
+    "sunnyWaterMultiplier": 2,
+    "spurtBonus": 1500
   },
   "slope": {
     "uphillSlowdownPerGrade": 0.05,

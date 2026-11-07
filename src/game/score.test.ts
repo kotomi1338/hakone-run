@@ -25,6 +25,7 @@ const run: RunConfig = {
   fallDurationMs: 1500,
   maxRate: 10,
   speedSmoothingMs: 200,
+  spurtMaxSpeed: 1.5,
 };
 const score: ScoreConfig = {
   timePointsPerKm: 50,
@@ -48,6 +49,8 @@ const score: ScoreConfig = {
   waterPoints: 150,
   cheerPoints: 100,
   eggPoints: 500,
+  sunnyWaterMultiplier: 2,
+  spurtBonus: 1500,
   fullRelayBonus: 2000,
   secondStageMultiplier: 1.2,
 };

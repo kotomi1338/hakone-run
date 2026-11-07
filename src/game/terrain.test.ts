@@ -84,6 +84,7 @@ describe("Runner と坂", () => {
     fallDurationMs: 1500,
     maxRate: 10,
     speedSmoothingMs: 1,
+    spurtMaxSpeed: 1.5,
   };
   const course = { secondsPerKm: 1 };
 

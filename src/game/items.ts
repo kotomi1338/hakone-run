@@ -49,12 +49,30 @@ export function itemsOf(sectionNo: number): readonly CourseItem[] {
   return ITEMS[sectionNo] ?? [];
 }
 
-/** 取ったときのポイント（倍率をかける前）。GOOD は満点 × itemGoodRatio */
-export function itemPoints(kind: ItemKind, grade: RelayGrade, score: ScoreConfig): number {
+/** 7区：日差しが強い区間（ここの給水はポイントが sunnyWaterMultiplier 倍）。気温の変化がいちばん大きい区間 */
+const SUNNY_ZONES: Record<number, { fromKm: number; toKm: number }> = {
+  7: { fromKm: 8, toKm: 16 },
+};
+
+export function sunnyZoneOf(sectionNo: number): { fromKm: number; toKm: number } | null {
+  return SUNNY_ZONES[sectionNo] ?? null;
+}
+
+export function isSunny(sectionNo: number, km: number): boolean {
+  const zone = sunnyZoneOf(sectionNo);
+  return zone !== null && km >= zone.fromKm && km <= zone.toKm;
+}
+
+/** 日差し給水（日差しが強い区間の給水）か */
+export function isSunnyWater(sectionNo: number, item: CourseItem): boolean {
+  return item.kind === "water" && isSunny(sectionNo, item.km);
+}
+
+/** 取ったときのポイント（6区以降の倍率をかける前）。GOOD は満点 × itemGoodRatio、日差し給水はさらに倍 */
+export function itemPoints(kind: ItemKind, grade: RelayGrade, score: ScoreConfig, sunny = false): number {
   const full = { water: score.waterPoints, cheer: score.cheerPoints, egg: score.eggPoints }[kind];
-  if (grade === "PERFECT") return full;
-  if (grade === "GOOD") return Math.round(full * score.itemGoodRatio);
-  return 0;
+  const base = grade === "PERFECT" ? full : grade === "GOOD" ? Math.round(full * score.itemGoodRatio) : 0;
+  return sunny && kind === "water" ? Math.round(base * score.sunnyWaterMultiplier) : base;
 }
 
 /** ずれ（最高速のときのミリ秒 = 画面のピクセル）から判定する */
@@ -74,6 +92,8 @@ export interface ItemResult {
   item: CourseItem;
   grade: RelayGrade;
   points: number;
+  /** 日差し給水だったか */
+  sunny: boolean;
 }
 
 /** 1区間ぶんのアイテムの取った・取り損ねたを管理する */
@@ -82,10 +102,12 @@ export class ItemTracker {
   /** 判定済みのアイテム（添字 → 判定） */
   readonly results = new Map<number, RelayGrade>();
   private readonly score: ScoreConfig;
+  private readonly sectionNo: number;
 
   constructor(sectionNo: number, score: ScoreConfig) {
     this.items = itemsOf(sectionNo);
     this.score = score;
+    this.sectionNo = sectionNo;
   }
 
   /**
@@ -121,6 +143,7 @@ export class ItemTracker {
   private record(index: number, grade: RelayGrade): ItemResult {
     this.results.set(index, grade);
     const item = this.items[index];
-    return { index, item, grade, points: itemPoints(item.kind, grade, this.score) };
+    const sunny = isSunnyWater(this.sectionNo, item);
+    return { index, item, grade, sunny, points: itemPoints(item.kind, grade, this.score, sunny) };
   }
 }

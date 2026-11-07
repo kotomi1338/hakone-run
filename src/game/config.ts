@@ -77,6 +77,8 @@ export interface RunConfig {
   maxRate: number;
   /** 速度が目標値に追いつく速さ（ミリ秒、小さいほど機敏） */
   speedSmoothingMs: number;
+  /** 10区ラストスパート：ダッシュの上限（最高速度の何倍まで出せるか） */
+  spurtMaxSpeed: number;
 }
 
 /** 全10区間。距離は実際の箱根駅伝に準拠 */
@@ -135,6 +137,10 @@ export interface ScoreConfig {
   waterPoints: number;
   cheerPoints: number;
   eggPoints: number;
+  /** 7区：日差しが強い区間の給水のポイント倍率 */
+  sunnyWaterMultiplier: number;
+  /** 10区：ラストスパートの平均の勢いがダッシュの上限なら満額もらえるボーナス */
+  spurtBonus: number;
   /** 6区以降に獲得したポイントの倍率 */
   secondStageMultiplier: number;
 }

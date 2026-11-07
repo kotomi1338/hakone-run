@@ -116,6 +116,11 @@ export class Race {
     this.currentScore.slope = points;
   }
 
+  /** 今の区間のラストスパートボーナスを記録する */
+  setSpurt(points: number): void {
+    this.currentScore.spurt = points;
+  }
+
   /** 今の区間に給水・応援・黒たまごの結果を足す */
   addItem(points: number, got: boolean): void {
     const s = this.currentScore;
