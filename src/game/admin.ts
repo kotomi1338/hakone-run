@@ -6,6 +6,7 @@
 // - settings.json：「現在の設定で保存」ボタンで書き込む。コミットすれば公開版にも反映される
 
 import GUI from "lil-gui";
+import type Phaser from "phaser";
 import {
   applySettings,
   COURSE_CONFIG,
@@ -14,6 +15,8 @@ import {
   sectionSeconds,
   snapshotSettings,
 } from "./config";
+import { Race } from "./race";
+import type { RunSceneData } from "./RunScene";
 import fileSettings from "./settings.json";
 
 const STORAGE_KEY = "hakone-run:admin-settings";
@@ -45,11 +48,22 @@ function clearBrowser(): void {
   }
 }
 
-export function setupAdmin(): () => void {
+export function setupAdmin(game: Phaser.Game): () => void {
   // ブラウザに保存した値を、管理画面を作る前に反映する
   loadFromBrowser();
 
   const gui = new GUI({ title: "管理画面（開発用）" });
+
+  // 区間ジャンプ：好きな区間からすぐ始める（それより前の区間タイムは記録なし）
+  const jump = { sectionNo: 1 };
+  const sectionOptions = Object.fromEntries(SECTIONS.map((s) => [`${s.no}区 ${s.from}→${s.to}`, s.no]));
+  gui
+    .add(jump, "sectionNo", sectionOptions)
+    .name("区間ジャンプ")
+    .onChange((no: number) => {
+      for (const scene of game.scene.getScenes(true)) game.scene.stop(scene.scene.key);
+      game.scene.start("RunScene", { race: new Race(no - 1) } satisfies RunSceneData);
+    });
 
   // コースの縮尺：距離は実際の箱根駅伝のまま、全区間まとめて長さを変える
   const course = gui.addFolder("コースの縮尺");

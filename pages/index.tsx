@@ -7,7 +7,7 @@ export default function HomePage() {
 
   useEffect(() => {
     let cancelled = false;
-    let game: { destroy(removeCanvas: boolean): void } | undefined;
+    let game: import("phaser").Game | undefined;
     let destroyAdmin: (() => void) | undefined;
 
     // import.meta.env.SSR はサーバー用ビルドで true に置き換わり、この分岐ごと消える。
@@ -22,8 +22,8 @@ export default function HomePage() {
         // 管理画面は開発時だけ読み込む（公開版のビルドには含まれない）
         if (import.meta.env.DEV) {
           const { setupAdmin } = await import("../src/game/admin");
-          if (cancelled) return;
-          destroyAdmin = setupAdmin();
+          if (cancelled || !game) return;
+          destroyAdmin = setupAdmin(game);
         }
       };
       void load();

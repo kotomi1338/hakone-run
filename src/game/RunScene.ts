@@ -1,13 +1,13 @@
 import Phaser from "phaser";
-import { COURSE_CONFIG, RUN_CONFIG, SECTIONS, type SectionConfig } from "./config";
+import { COURSE_CONFIG, RUN_CONFIG, type SectionConfig } from "./config";
+import { bindGameKeys, formatTime } from "./input";
+import { FONT, GAME_HEIGHT, GAME_WIDTH, TEXT_COLOR } from "./layout";
+import { Race, STAGE_NAMES } from "./race";
 import { Runner } from "./runner";
 
-export const GAME_WIDTH = 960;
-export const GAME_HEIGHT = 540;
-
-const FONT = '"Hiragino Sans", "Noto Sans JP", "Yu Gothic", sans-serif';
 const GROUND_Y = 400;
-const RUNNER_X = 240;
+/** 進む方向の反対側の端からランナーまでの距離（ピクセル） */
+const RUNNER_MARGIN_X = 240;
 const RUNNER_SIZE = 48;
 /** 最高速度のとき画面が1秒に流れるピクセル数（縮尺を変えても見た目の速さは一定） */
 const MAX_SCROLL_PX_PER_SEC = 1000;
@@ -15,16 +15,28 @@ const MAX_SCROLL_PX_PER_SEC = 1000;
 const MIN_LABEL_GAP_PX = 160;
 /** 表示用の速度（最高速度のときの km/h） */
 const DISPLAY_TOP_KMH = 21;
+/** 中継所に着いてから次の区間が始まるまで（ミリ秒） */
+const RELAY_PAUSE_MS = 1500;
 
-type State = "ready" | "running" | "finished";
+type State = "ready" | "running" | "arrived";
+
+export interface RunSceneData {
+  race?: Race;
+  /** true ならスペース待ちをせず、すぐに区間をスタートする（襷リレー後など） */
+  autoStart?: boolean;
+}
 
 export class RunScene extends Phaser.Scene {
-  private section: SectionConfig = SECTIONS[0];
+  private race!: Race;
+  private section!: SectionConfig;
+  private autoStart = false;
   private runner!: Runner;
   private state: State = "ready";
   private startedAt = 0;
-  private finishedAt = 0;
+  private arrivedAt = 0;
   private runPhase = 0;
+  /** 進む向き。往路は左から右（右向き）なので +1、復路は右から左なので -1 */
+  private dir: 1 | -1 = 1;
 
   private bg!: Phaser.GameObjects.Graphics;
   private road!: Phaser.GameObjects.Graphics;
@@ -40,10 +52,17 @@ export class RunScene extends Phaser.Scene {
     super("RunScene");
   }
 
+  init(data: RunSceneData): void {
+    this.race = data.race ?? new Race();
+    this.section = this.race.section;
+    this.autoStart = data.autoStart ?? false;
+  }
+
   create(): void {
     this.runner = new Runner(RUN_CONFIG, this.section);
     this.state = "ready";
     this.runPhase = 0;
+    this.dir = this.race.stage === 1 ? 1 : -1;
 
     this.cameras.main.setBackgroundColor("#bfe3ff");
     this.bg = this.add.graphics();
@@ -53,8 +72,9 @@ export class RunScene extends Phaser.Scene {
         .text(0, GROUND_Y + 92, "", { fontFamily: FONT, fontSize: "18px", color: "#ffffff" })
         .setOrigin(0.5, 0),
     );
+    const goalName = this.race.isStageLastSection ? `${this.section.to} ゴール` : `${this.section.to}中継所`;
     this.goalLabel = this.add
-      .text(0, GROUND_Y - 150, `${this.section.to}中継所`, {
+      .text(0, GROUND_Y - 150, goalName, {
         fontFamily: FONT,
         fontSize: "22px",
         color: "#ffffff",
@@ -64,76 +84,71 @@ export class RunScene extends Phaser.Scene {
       .setOrigin(0.5, 1);
 
     this.runnerRect = this.add
-      .rectangle(RUNNER_X, GROUND_Y, RUNNER_SIZE, RUNNER_SIZE, 0x1e5bd8)
+      .rectangle(this.runnerX, GROUND_Y, RUNNER_SIZE, RUNNER_SIZE, 0x1e5bd8)
       .setOrigin(0.5, 1)
       .setStrokeStyle(3, 0x0b2a6b);
 
     this.progressBar = this.add.graphics();
-    this.hud = this.add.text(24, 56, "", {
+    this.add.text(24, 12, STAGE_NAMES[this.race.stage], {
       fontFamily: FONT,
-      fontSize: "18px",
-      color: "#10243e",
-      lineSpacing: 6,
+      fontSize: "15px",
+      color: TEXT_COLOR,
     });
-    this.add.text(24, 16, `${this.section.no}区  ${this.section.from} → ${this.section.to}（${this.section.distanceKm}km）`, {
+    this.add.text(24, 32, `${this.section.no}区  ${this.section.from} → ${this.section.to}（${this.section.distanceKm}km）`, {
       fontFamily: FONT,
       fontSize: "22px",
-      color: "#10243e",
+      color: TEXT_COLOR,
       fontStyle: "bold",
+    });
+    this.hud = this.add.text(24, 70, "", {
+      fontFamily: FONT,
+      fontSize: "18px",
+      color: TEXT_COLOR,
+      lineSpacing: 6,
     });
 
     this.centerText = this.add
-      .text(GAME_WIDTH / 2, 190, "スペースキーを連打してスタート！", {
+      .text(GAME_WIDTH / 2, 200, "スペースキーを連打してスタート！", {
         fontFamily: FONT,
         fontSize: "36px",
-        color: "#10243e",
+        color: TEXT_COLOR,
         fontStyle: "bold",
         stroke: "#ffffff",
         strokeThickness: 6,
       })
       .setOrigin(0.5);
     this.subText = this.add
-      .text(GAME_WIDTH / 2, 240, "速く連打するほど速く走る。でも連打しすぎると転ぶ", {
+      .text(GAME_WIDTH / 2, 250, "速く連打するほど速く走る。でも連打しすぎると転ぶ", {
         fontFamily: FONT,
         fontSize: "20px",
-        color: "#10243e",
+        color: TEXT_COLOR,
         stroke: "#ffffff",
         strokeThickness: 4,
       })
       .setOrigin(0.5);
 
-    // キー入力は Phaser ではなく window で直接受ける（e.repeat と preventDefault を確実に扱うため）
-    window.addEventListener("keydown", this.onKeyDown);
-    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
-      window.removeEventListener("keydown", this.onKeyDown);
+    bindGameKeys(this, {
+      onSpace: (now) => {
+        if (this.state === "ready") this.start(now);
+        if (this.state === "running") this.runner.tap(now);
+      },
     });
+
+    if (this.autoStart) this.start(performance.now());
 
     this.drawWorld();
     this.drawHud(performance.now());
   }
 
-  private onKeyDown = (e: KeyboardEvent): void => {
-    // 管理画面などの入力欄に文字を打っているときはゲーム操作として扱わない
-    if (isEditableTarget(e.target)) return;
+  /** ランナーの画面上の位置。進む方向の反対側に寄せて、前方が見えるようにする */
+  private get runnerX(): number {
+    return this.dir === 1 ? RUNNER_MARGIN_X : GAME_WIDTH - RUNNER_MARGIN_X;
+  }
 
-    const isSpace = e.code === "Space";
-    const isEnter = e.code === "Enter" || e.code === "NumpadEnter";
-    if (!isSpace && !isEnter) return;
-
-    // ページのスクロール防止（押しっぱなしのリピートでもスクロールさせない）
-    e.preventDefault();
-    // 押しっぱなし対策：キーリピートは連打として数えない
-    if (e.repeat) return;
-
-    const now = performance.now();
-
-    if (isSpace) {
-      if (this.state === "ready") this.start(now);
-      if (this.state === "running") this.runner.tap(now);
-    } else if (isEnter && this.state === "finished") {
-      this.scene.restart();
-    }
-  };
+  /** 右向き（往路）で計算した x を、復路なら左右反転する。w は矩形の幅 */
+  private mx(x: number, w = 0): number {
+    return this.dir === 1 ? x : GAME_WIDTH - x - w;
+  }
 
   private start(now: number): void {
     this.state = "running";
@@ -147,28 +162,46 @@ export class RunScene extends Phaser.Scene {
 
     if (this.state === "running") {
       this.runner.update(now, delta);
-      if (this.runner.finished) this.finish(now);
+      if (this.runner.finished) this.arrive(now);
     }
 
     const fallen = this.runner.isFallen(now);
     this.runPhase += this.runner.speedRatio * delta * 0.03;
     const bob = fallen ? 0 : Math.abs(Math.sin(this.runPhase)) * 10 * this.runner.speedRatio;
     this.runnerRect.y = GROUND_Y - bob;
-    this.runnerRect.angle = fallen ? 90 : this.runner.speedRatio * 12;
+    this.runnerRect.angle = (fallen ? 90 : this.runner.speedRatio * 12) * this.dir;
     this.runnerRect.fillColor = fallen ? 0xd84b1e : 0x1e5bd8;
 
     this.drawWorld();
     this.drawHud(now);
   }
 
-  private finish(now: number): void {
-    this.state = "finished";
-    this.finishedAt = now;
-    const time = formatTime(this.finishedAt - this.startedAt);
-    this.centerText.setText(`${this.section.to}中継所 到着！  ${time}`).setVisible(true);
+  /** 中継所（またはゴール）に着いた。タイムを記録して、少し待ってから次へ */
+  private arrive(now: number): void {
+    this.state = "arrived";
+    this.arrivedAt = now;
+    const time = this.arrivedAt - this.startedAt;
+    this.race.recordSection(time);
+
+    const next = this.race.nextSection;
+    if (this.race.isStageLastSection) {
+      const label = this.race.stage === 1 ? "往路ゴール！" : "総合ゴール！";
+      this.centerText.setText(`${this.section.to} ${label}`).setVisible(true);
+    } else if (next) {
+      this.centerText.setText(`襷リレー！  ${this.section.no}区 → ${next.no}区`).setVisible(true);
+    }
     this.subText
-      .setText(`連打 ${this.runner.tapCount}回 / 転倒 ${this.runner.fallCount}回    Enterでもう一度`)
+      .setText(`区間タイム ${formatTime(time)}   連打 ${this.runner.tapCount}回 / 転倒 ${this.runner.fallCount}回`)
       .setVisible(true);
+
+    this.time.delayedCall(RELAY_PAUSE_MS, () => {
+      if (this.race.isStageLastSection) {
+        this.scene.start("StageResultScene", { race: this.race });
+      } else {
+        this.race.advance();
+        this.scene.restart({ race: this.race, autoStart: true } satisfies RunSceneData);
+      }
+    });
   }
 
   private drawWorld(): void {
@@ -176,6 +209,7 @@ export class RunScene extends Phaser.Scene {
     const pxPerKm = MAX_SCROLL_PX_PER_SEC * COURSE_CONFIG.secondsPerKm;
     const offsetPx = this.runner.distanceKm * pxPerKm;
 
+    // 以下は右向き（往路）として位置を計算し、mx() で復路のときは左右反転する
     // 遠景のビル（ゆっくり流れる）
     const g = this.bg;
     g.clear();
@@ -186,7 +220,7 @@ export class RunScene extends Phaser.Scene {
       const h = 60 + ((i * 7919) % 110);
       const x = i * bw - farOffset;
       g.fillStyle(i % 2 === 0 ? 0x9fbad6 : 0x8aa7c7);
-      g.fillRect(x, GROUND_Y - h, bw - 8, h);
+      g.fillRect(this.mx(x, bw - 8), GROUND_Y - h, bw - 8, h);
     }
 
     // 道路
@@ -201,15 +235,15 @@ export class RunScene extends Phaser.Scene {
     const firstDash = Math.floor(offsetPx / dash);
     r.fillStyle(0xf5f5f5);
     for (let i = firstDash; i < firstDash + GAME_WIDTH / dash + 2; i++) {
-      r.fillRect(i * dash - offsetPx, GROUND_Y + 66, dash / 2, 6);
+      r.fillRect(this.mx(i * dash - offsetPx, dash / 2), GROUND_Y + 66, dash / 2, 6);
     }
 
-    // 1kmごとの距離表示
+    // 距離表示（スタートからの km）
     const stepKm = Math.max(1, Math.ceil(MIN_LABEL_GAP_PX / pxPerKm));
-    const firstKm = Math.floor((offsetPx - RUNNER_X) / pxPerKm / stepKm) * stepKm;
+    const firstKm = Math.floor((offsetPx - RUNNER_MARGIN_X) / pxPerKm / stepKm) * stepKm;
     this.kmLabels.forEach((label, idx) => {
       const km = firstKm + idx * stepKm;
-      const x = km * pxPerKm - offsetPx + RUNNER_X;
+      const x = this.mx(km * pxPerKm - offsetPx + RUNNER_MARGIN_X);
       const visible = km > 0 && km < this.section.distanceKm && x > -50 && x < GAME_WIDTH + 50;
       label.setVisible(visible);
       if (!visible) return;
@@ -218,7 +252,7 @@ export class RunScene extends Phaser.Scene {
     });
 
     // ゴール（中継所）
-    const goalX = this.section.distanceKm * pxPerKm - offsetPx + RUNNER_X;
+    const goalX = this.mx(this.section.distanceKm * pxPerKm - offsetPx + RUNNER_MARGIN_X);
     const goalVisible = goalX > -100 && goalX < GAME_WIDTH + 100;
     this.goalLabel.setVisible(goalVisible).setX(goalX);
     if (goalVisible) {
@@ -230,7 +264,9 @@ export class RunScene extends Phaser.Scene {
 
   private drawHud(now: number): void {
     const elapsed =
-      this.state === "ready" ? 0 : (this.state === "finished" ? this.finishedAt : now) - this.startedAt;
+      this.state === "ready" ? 0 : (this.state === "arrived" ? this.arrivedAt : now) - this.startedAt;
+    // 総合タイム：記録済みの区間 + 今の区間（着いた後は記録済みに含まれる）
+    const total = this.race.totalMs() + (this.state === "running" ? elapsed : 0);
     const remain = Math.max(0, this.section.distanceKm - this.runner.distanceKm);
     const kmh = this.runner.speedRatio * DISPLAY_TOP_KMH;
     const lastTapAt = this.runner.lastTapAt;
@@ -238,7 +274,7 @@ export class RunScene extends Phaser.Scene {
     const fallen = this.runner.isFallen(now);
 
     this.hud.setText([
-      `タイム  ${formatTime(elapsed)}`,
+      `区間タイム  ${formatTime(elapsed)}    総合  ${formatTime(total)}`,
       `残り  ${remain.toFixed(2)} km`,
       `速度  ${kmh.toFixed(1)} km/h${fallen ? "   転倒！" : ""}`,
       `前回から  ${sinceLast === null ? "-" : `${(sinceLast / 1000).toFixed(2)} 秒`}${
@@ -246,14 +282,15 @@ export class RunScene extends Phaser.Scene {
       }`,
     ]);
 
-    // 進捗バー
+    // 進捗バー（進む向きに合わせて伸ばす）
     const p = this.progressBar;
     const x = GAME_WIDTH - 324;
     const y = 24;
     const w = 300;
+    const filled = Math.max(14, (w * this.runner.distanceKm) / this.section.distanceKm);
     p.clear();
     p.fillStyle(0xffffff, 0.8).fillRoundedRect(x, y, w, 14, 7);
-    p.fillStyle(0x1e5bd8).fillRoundedRect(x, y, Math.max(14, (w * this.runner.distanceKm) / this.section.distanceKm), 14, 7);
+    p.fillStyle(0x1e5bd8).fillRoundedRect(this.dir === 1 ? x : x + w - filled, y, filled, 14, 7);
 
     // 押す間隔ゲージ：前回の連打からの経過時間。赤（早すぎ）を抜けて緑になってから押す
     const gy = 52;
@@ -268,16 +305,4 @@ export class RunScene extends Phaser.Scene {
       p.fillStyle(sinceLast < RUN_CONFIG.fallIntervalMs ? 0xd84b1e : 0x10243e).fillRect(toX(sinceLast) - 2, gy - 4, 4, 20);
     }
   }
-}
-
-function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  return target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
-}
-
-function formatTime(ms: number): string {
-  const total = Math.max(0, ms) / 1000;
-  const m = Math.floor(total / 60);
-  const s = total - m * 60;
-  return `${m}:${s.toFixed(1).padStart(4, "0")}`;
 }
