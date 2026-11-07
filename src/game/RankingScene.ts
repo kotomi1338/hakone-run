@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { createTextures } from "./art/textures";
+import { playSe, preloadSounds } from "./audio";
 import { bindGameKeys, formatTime } from "./input";
 import { FONT, GAME_HEIGHT, GAME_WIDTH, TEXT_COLOR } from "./layout";
 import { Race } from "./race";
@@ -27,6 +28,10 @@ export class RankingScene extends Phaser.Scene {
 
   init(data: RankingSceneData): void {
     this.highlight = data.highlight;
+  }
+
+  preload(): void {
+    preloadSounds(this);
   }
 
   create(): void {
@@ -62,7 +67,10 @@ export class RankingScene extends Phaser.Scene {
     this.tweens.add({ targets: hint, alpha: 0.35, duration: 700, yoyo: true, repeat: -1, ease: "Sine.InOut" });
 
     bindGameKeys(this, {
-      onEnter: () => this.scene.start("RunScene", { race: new Race() } satisfies RunSceneData),
+      onEnter: () => {
+        playSe(this, "click");
+        this.scene.start("RunScene", { race: new Race() } satisfies RunSceneData);
+      },
     });
 
     fetchRankings(TOP_COUNT)

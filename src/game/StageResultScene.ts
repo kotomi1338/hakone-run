@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { createTextures } from "./art/textures";
+import { playSe, preloadSounds } from "./audio";
 import { bindGameKeys, formatTime } from "./input";
 import { FONT, GAME_HEIGHT, GAME_WIDTH, TEXT_COLOR } from "./layout";
 import { Race, sectionsOfStage, STAGE_NAMES, type Stage } from "./race";
@@ -30,6 +31,10 @@ export class StageResultScene extends Phaser.Scene {
   init(data: StageResultSceneData): void {
     this.race = data.race;
     this.rowIndex = 0;
+  }
+
+  preload(): void {
+    preloadSounds(this);
   }
 
   create(): void {
@@ -136,8 +141,10 @@ export class StageResultScene extends Phaser.Scene {
           // 登録するか選ぶまでは Enter で先に進まない（入力欄にカーソルを戻す）
           this.rankingFormFocus?.();
         } else if (final) {
+          playSe(this, "click");
           this.scene.start("RunScene", { race: new Race() } satisfies RunSceneData);
         } else {
+          playSe(this, "click");
           this.race.advance();
           this.scene.start("RunScene", { race: this.race, autoStart: true } satisfies RunSceneData);
         }
@@ -154,12 +161,16 @@ export class StageResultScene extends Phaser.Scene {
     if (!container) return;
     const form = createRankingForm(container, {
       onSubmit: async (name) => {
+        playSe(this, "click");
         const submission = buildSubmission(this.race, name);
         if (!submission) throw new Error("この記録は登録できません");
         const { entry } = await submitRanking(submission);
         this.scene.start("RankingScene", { highlight: entry } satisfies RankingSceneData);
       },
-      onSkip: () => this.scene.start("RunScene", { race: new Race() } satisfies RunSceneData),
+      onSkip: () => {
+        playSe(this, "click");
+        this.scene.start("RunScene", { race: new Race() } satisfies RunSceneData);
+      },
     });
     this.rankingFormFocus = form.focus;
     // 結果の表示が落ち着いてから入力欄にカーソルを置く

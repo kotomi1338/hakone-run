@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { createTextures, FAN_COLORS } from "./art/textures";
+import { playSe, preloadSounds, startBgm, stopBgm } from "./audio";
 import { COURSE_CONFIG, RUN_CONFIG, SCORE_CONFIG, type SectionConfig } from "./config";
 import { bindGameKeys, formatTime } from "./input";
 import { isSunny, ITEM_ACTIONS, ITEM_NAMES, ItemTracker, sunnyZoneOf, type ItemKind, type ItemResult } from "./items";
@@ -141,8 +142,14 @@ export class RunScene extends Phaser.Scene {
     this.autoStart = data.autoStart ?? false;
   }
 
+  preload(): void {
+    preloadSounds(this);
+  }
+
   create(): void {
     createTextures(this);
+    // 区間ジャンプや結果画面への切り替えでシーンが終わったら BGM も止める
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.sound.get("bgm")?.stop());
     this.runner = new Runner(RUN_CONFIG, this.section);
     this.combo = new RhythmCombo(RUN_CONFIG, SCORE_CONFIG);
     this.slopeBonus = new SlopeBonus(this.section.no, SCORE_CONFIG);
@@ -334,7 +341,10 @@ export class RunScene extends Phaser.Scene {
           .setOrigin(0.5)
           .setDepth(HUD_DEPTH)
           .setInteractive({ useHandCursor: true })
-          .on("pointerdown", () => this.scene.start("RankingScene", {} satisfies RankingSceneData));
+          .on("pointerdown", () => {
+            playSe(this, "click");
+            this.scene.start("RankingScene", {} satisfies RankingSceneData);
+          });
       }
       this.tweens.add({ targets: this.centerText, scale: 1.06, duration: 600, yoyo: true, repeat: -1, ease: "Sine.InOut" });
     }
@@ -554,6 +564,8 @@ export class RunScene extends Phaser.Scene {
     this.rankingButton?.destroy();
     this.rankingButton = undefined;
     this.effects.bigText("スタート！", GAME_WIDTH / 2, 236, "#c0392b", 44);
+    playSe(this, "start");
+    startBgm(this, () => this.state === "running");
   }
 
   update(time: number, delta: number): void {
@@ -650,6 +662,8 @@ export class RunScene extends Phaser.Scene {
       const mult = sectionMultiplier(this.section.no, SCORE_CONFIG);
       this.effects.bigText(`ラストスパート  +${Math.round(bonus * mult)}`, GAME_WIDTH / 2, 186, "#8e44ad", 34);
     }
+
+    stopBgm(this);
 
     // ゴールテープを切って紙吹雪
     this.goalTapeBroken = true;

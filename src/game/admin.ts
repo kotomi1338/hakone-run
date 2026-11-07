@@ -10,6 +10,7 @@ import type Phaser from "phaser";
 import {
   applySettings,
   COURSE_CONFIG,
+  AUDIO_CONFIG,
   RUN_CONFIG,
   SCORE_CONFIG,
   SECTIONS,
@@ -17,6 +18,7 @@ import {
   sectionSeconds,
   snapshotSettings,
 } from "./config";
+import { applyBgmVolume } from "./audio";
 import { Race } from "./race";
 import type { RunSceneData } from "./RunScene";
 import fileSettings from "./settings.json";
@@ -144,6 +146,11 @@ export function setupAdmin(game: Phaser.Game): () => void {
   scoring.close();
 
   // ポイント計算の見える化：今のレースの内訳を区間ごと・項目ごとに表で出す
+  const audio = gui.addFolder("音量");
+  audio.add(AUDIO_CONFIG, "bgmVolume", 0, 1, 0.05).name("BGM").onChange(() => applyBgmVolume(game.sound));
+  audio.add(AUDIO_CONFIG, "seVolume", 0, 1, 0.05).name("効果音");
+  audio.close();
+
   const breakdownFolder = gui.addFolder("ポイント内訳");
   const table = document.createElement("div");
   table.style.cssText = "padding:6px 8px;font-size:11px;line-height:1.5;overflow-x:auto";

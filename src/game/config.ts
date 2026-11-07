@@ -10,7 +10,17 @@ export interface Settings {
   run: RunConfig;
   score: ScoreConfig;
   slope: SlopeConfig;
+  audio: AudioConfig;
 }
+
+export interface AudioConfig {
+  /** レース中の BGM の音量（0〜1） */
+  bgmVolume: number;
+  /** 効果音（スタート音・クリック音）の音量（0〜1） */
+  seVolume: number;
+}
+
+export const AUDIO_CONFIG: AudioConfig = { ...settings.audio };
 
 export interface SectionConfig {
   /** 区間番号（1〜10） */
@@ -154,6 +164,7 @@ export function snapshotSettings(): Settings {
     run: { ...RUN_CONFIG },
     score: { ...SCORE_CONFIG },
     slope: { ...SLOPE_CONFIG },
+    audio: { ...AUDIO_CONFIG },
   };
 }
 
@@ -165,6 +176,7 @@ export function applySettings(input: unknown): void {
   assignNumbers(RUN_CONFIG, src.run);
   assignNumbers(SCORE_CONFIG, src.score);
   assignNumbers(SLOPE_CONFIG, src.slope);
+  assignNumbers(AUDIO_CONFIG, src.audio);
 }
 
 function assignNumbers<T extends object>(target: T, source: unknown): void {

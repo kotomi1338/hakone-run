@@ -46,5 +46,9 @@
     "downhillBoostPerGrade": 0.05,
     "maxDownhillBoost": 0.4,
     "downhillFallIntervalMsPerGrade": 25
+  },
+  "audio": {
+    "bgmVolume": 0.5,
+    "seVolume": 0.8
   }
 }
