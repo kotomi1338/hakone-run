@@ -111,6 +111,19 @@ export class Race {
     s.maxCombo = Math.max(s.maxCombo, combo);
   }
 
+  /** 今の区間の坂ボーナスの合計を記録する */
+  setSlope(points: number): void {
+    this.currentScore.slope = points;
+  }
+
+  /** 今の区間に給水・応援・黒たまごの結果を足す */
+  addItem(points: number, got: boolean): void {
+    const s = this.currentScore;
+    s.items += points;
+    s.itemsJudged++;
+    if (got) s.itemsGot++;
+  }
+
   /** index 番目の区間の襷の判定を記録する（判定済みなら何もしない） */
   setRelay(index: number, grade: RelayGrade): void {
     const s = (this.sectionScores[index] ??= emptySectionScore());

@@ -25,7 +25,18 @@
     "relayPerfectPoints": 300,
     "relayGoodPoints": 100,
     "fullRelayBonus": 2000,
-    "secondStageMultiplier": 1.2
+    "secondStageMultiplier": 1.2,
+    "hillTargetEffort": 0.8,
+    "hillCheckpointPoints": 100,
+    "summitBonus": 500,
+    "downhillTargetEffort": 0.7,
+    "downhillPointsPerKm": 40,
+    "itemPerfectMs": 80,
+    "itemGoodMs": 200,
+    "itemGoodRatio": 0.5,
+    "waterPoints": 150,
+    "cheerPoints": 100,
+    "eggPoints": 500
   },
   "slope": {
     "uphillSlowdownPerGrade": 0.05,

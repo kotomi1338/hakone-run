@@ -125,6 +125,17 @@ export function setupAdmin(game: Phaser.Game): () => void {
   scoring.add(SCORE_CONFIG, "relayGoodMs", 0, 400, 5).name("襷GOOD幅(ms)");
   scoring.add(SCORE_CONFIG, "relayPerfectPoints", 0, 2000, 10).name("襷PERFECT(pt)");
   scoring.add(SCORE_CONFIG, "relayGoodPoints", 0, 2000, 10).name("襷GOOD(pt)");
+  scoring.add(SCORE_CONFIG, "hillTargetEffort", 0, 1, 0.05).name("5区 区切りの目安(勢い)");
+  scoring.add(SCORE_CONFIG, "hillCheckpointPoints", 0, 1000, 10).name("5区 区切り1つ(pt)");
+  scoring.add(SCORE_CONFIG, "summitBonus", 0, 5000, 50).name("5区 最高地点(pt)");
+  scoring.add(SCORE_CONFIG, "downhillTargetEffort", 0, 1, 0.05).name("6区 下りの目安(勢い)");
+  scoring.add(SCORE_CONFIG, "downhillPointsPerKm", 0, 500, 5).name("6区 下り1km(pt)");
+  scoring.add(SCORE_CONFIG, "itemPerfectMs", 0, 400, 5).name("アイテムPERFECT幅(ms)");
+  scoring.add(SCORE_CONFIG, "itemGoodMs", 0, 400, 5).name("アイテムGOOD幅(ms)");
+  scoring.add(SCORE_CONFIG, "itemGoodRatio", 0, 1, 0.05).name("GOODでもらえる割合");
+  scoring.add(SCORE_CONFIG, "waterPoints", 0, 2000, 10).name("給水(pt)");
+  scoring.add(SCORE_CONFIG, "cheerPoints", 0, 2000, 10).name("応援(pt)");
+  scoring.add(SCORE_CONFIG, "eggPoints", 0, 5000, 10).name("黒たまご(pt)");
   scoring.add(SCORE_CONFIG, "fullRelayBonus", 0, 20000, 100).name("全区間ボーナス(pt)");
   scoring.add(SCORE_CONFIG, "secondStageMultiplier", 1, 3, 0.05).name("6区以降の倍率");
   scoring.close();
@@ -191,17 +202,17 @@ function breakdownHtml(race: Race): string {
   const num = (n: number) => n.toLocaleString();
   const cell = (v: string, bold = false) =>
     `<td style="text-align:right;padding:0 4px;${bold ? "font-weight:bold" : ""}">${v}</td>`;
-  const head = ["区", "タイム", "リズム", "襷", "小計", "倍率", "合計"]
+  const head = ["区", "タイム", "リズム", "襷", "坂", "アイテム", "小計", "倍率", "合計"]
     .map((h) => `<th style="text-align:right;padding:0 4px">${h}</th>`)
     .join("");
   const rows = b.sections
     .map((s) => {
       const relay = s.relayGrade ? `${num(s.relay)} <small>${s.relayGrade}</small>` : "-";
-      return `<tr>${cell(`${s.no}`)}${cell(num(s.time))}${cell(`${num(s.rhythm)} <small>最大${s.maxCombo}</small>`)}${cell(relay)}${cell(num(s.subtotal))}${cell(`×${s.multiplier}`)}${cell(num(s.total), true)}</tr>`;
+      return `<tr>${cell(`${s.no}`)}${cell(num(s.time))}${cell(`${num(s.rhythm)} <small>最大${s.maxCombo}</small>`)}${cell(relay)}${cell(s.slope ? num(s.slope) : "-")}${cell(s.itemsJudged ? `${num(s.items)} <small>${s.itemsGot}/${s.itemsJudged}</small>` : "-")}${cell(num(s.subtotal))}${cell(`×${s.multiplier}`)}${cell(num(s.total), true)}</tr>`;
     })
     .join("");
   const footer =
-    `<tr><td colspan="6" style="text-align:right;padding:0 4px">全区間ボーナス${race.allConnected ? "" : "（10区間すべて走ると加算）"}</td>${cell(num(b.fullRelayBonus))}</tr>` +
-    `<tr><td colspan="6" style="text-align:right;padding:0 4px;font-weight:bold">最終ポイント</td>${cell(num(b.total), true)}</tr>`;
+    `<tr><td colspan="8" style="text-align:right;padding:0 4px">全区間ボーナス${race.allConnected ? "" : "（10区間すべて走ると加算）"}</td>${cell(num(b.fullRelayBonus))}</tr>` +
+    `<tr><td colspan="8" style="text-align:right;padding:0 4px;font-weight:bold">最終ポイント</td>${cell(num(b.total), true)}</tr>`;
   return `<table style="border-collapse:collapse;width:100%"><thead><tr>${head}</tr></thead><tbody>${rows}${footer}</tbody></table>`;
 }

@@ -5,6 +5,8 @@ import { FONT, GAME_HEIGHT, GAME_WIDTH, TEXT_COLOR } from "./layout";
 import { Race, sectionsOfStage, STAGE_NAMES } from "./race";
 import { Runner } from "./runner";
 import { elevationAt, segmentAt } from "./terrain";
+import { SlopeBonus, type SlopeBonusEvent } from "./slopeBonus";
+import { ITEM_ACTIONS, ITEM_NAMES, ItemTracker, type ItemKind, type ItemResult } from "./items";
 import { judgeRelay, RhythmCombo, sectionMultiplier, type RelayGrade } from "./score";
 
 const GROUND_Y = 400;
@@ -24,6 +26,16 @@ const RELAY_MESSAGE_MS = 1500;
 /** 中継線までこのピクセル以内に近づいたら襷ゲージを出し、エンターを受け付ける */
 const RELAY_GAUGE_PX = 400;
 const RELAY_GRADE_COLORS: Record<RelayGrade, string> = { PERFECT: "#f2a900", GOOD: "#2e9e4f", MISS: "#7a7a7a" };
+const ITEM_LABEL_COLORS: Record<ItemKind, string> = { water: "#2e86de", cheer: "#e67e22", egg: "#222222" };
+
+/** エンターで狙うもの（襷 or アイテム）と、そのずれ */
+interface TimingTarget {
+  /** 目印とのずれ（ピクセル。手前ならプラス、越えた後はマイナス） */
+  px: number;
+  label: string;
+  perfectPx: number;
+  goodPx: number;
+}
 
 type State = "ready" | "running" | "arrived";
 
@@ -50,9 +62,15 @@ export class RunScene extends Phaser.Scene {
   private kmLabels: Phaser.GameObjects.Text[] = [];
   /** 中継所・ゴールの看板（画面に同時に映るのはせいぜい2つ） */
   private postLabels: Phaser.GameObjects.Text[] = [];
+  /** 給水・応援・黒たまごの看板 */
+  private itemLabels: Phaser.GameObjects.Text[] = [];
+  /** 区間（SECTIONS の添字）ごとのアイテムの取った・取り損ね */
+  private itemTrackers = new Map<number, ItemTracker>();
   private sectionTitle!: Phaser.GameObjects.Text;
   private relayMessageTimer?: Phaser.Time.TimerEvent;
   private combo!: RhythmCombo;
+  private slopeBonus!: SlopeBonus;
+  private slopeText!: Phaser.GameObjects.Text;
   private pointsText!: Phaser.GameObjects.Text;
   private comboText!: Phaser.GameObjects.Text;
   private relayGauge!: Phaser.GameObjects.Graphics;
@@ -77,6 +95,8 @@ export class RunScene extends Phaser.Scene {
   create(): void {
     this.runner = new Runner(RUN_CONFIG, this.section);
     this.combo = new RhythmCombo(RUN_CONFIG, SCORE_CONFIG);
+    this.slopeBonus = new SlopeBonus(this.section.no, SCORE_CONFIG);
+    this.itemTrackers = new Map();
     // 管理画面のポイント内訳が今のレースを読めるようにする
     this.registry.set("race", this.race);
     this.state = "ready";
@@ -101,6 +121,11 @@ export class RunScene extends Phaser.Scene {
           backgroundColor: "#c0392b",
           padding: { x: 10, y: 4 },
         })
+        .setOrigin(0.5, 1),
+    );
+    this.itemLabels = Array.from({ length: 6 }, () =>
+      this.add
+        .text(0, 0, "", { fontFamily: FONT, fontSize: "15px", color: "#ffffff", padding: { x: 6, y: 2 } })
         .setOrigin(0.5, 1),
     );
 
@@ -137,9 +162,21 @@ export class RunScene extends Phaser.Scene {
       .text(GAME_WIDTH - 24, 116, "", { fontFamily: FONT, fontSize: "18px", color: TEXT_COLOR, lineSpacing: 4, align: "right" })
       .setOrigin(1, 0);
 
+    this.slopeText = this.add
+      .text(0, GROUND_Y - 80, "", {
+        fontFamily: FONT,
+        fontSize: "20px",
+        color: "#2e9e4f",
+        fontStyle: "bold",
+        stroke: "#ffffff",
+        strokeThickness: 4,
+      })
+      .setOrigin(0.5, 1)
+      .setVisible(false);
+
     this.relayGauge = this.add.graphics();
     this.relayGaugeText = this.add
-      .text(GAME_WIDTH / 2, 312, "Enterで襷を渡す！", {
+      .text(GAME_WIDTH / 2, 116, "Enterで襷を渡す！", {
         fontFamily: FONT,
         fontSize: "20px",
         color: "#c0392b",
@@ -187,7 +224,7 @@ export class RunScene extends Phaser.Scene {
         if (this.state === "running") this.onTap(now);
       },
       onEnter: () => {
-        if (this.state === "running") this.onRelayKey();
+        if (this.state === "running") this.onEnterKey();
       },
     });
 
@@ -244,10 +281,59 @@ export class RunScene extends Phaser.Scene {
   /** このシーンで前の区間から走ってきたか（区間ジャンプ直後は前の中継線の判定をしない） */
   private ranPrev = false;
 
-  private onRelayKey(): void {
-    const target = this.relayOffset();
-    if (!target) return; // 中継所の近く以外でのエンターは何もしない
-    this.judge(target.index, judgeRelay(target.px, SCORE_CONFIG));
+  /** 今の区間のアイテム管理（なければ作る） */
+  private trackerOf(sectionIndex: number): ItemTracker {
+    let t = this.itemTrackers.get(sectionIndex);
+    if (!t) {
+      t = new ItemTracker(sectionIndex + 1, SCORE_CONFIG);
+      this.itemTrackers.set(sectionIndex, t);
+    }
+    return t;
+  }
+
+  private get itemTracker(): ItemTracker {
+    return this.trackerOf(this.race.sectionIndex);
+  }
+
+  /** エンターで狙うもの。襷を優先し、なければ一番手前のアイテム */
+  private timingTarget(): TimingTarget | null {
+    const relay = this.relayOffset();
+    if (relay) {
+      return { px: relay.px, label: "Enterで襷を渡す！", perfectPx: SCORE_CONFIG.relayPerfectMs, goodPx: SCORE_CONFIG.relayGoodMs };
+    }
+    const item = this.itemTracker.target(this.runner.distanceKm, this.pxPerKm, RELAY_GAUGE_PX);
+    if (item) {
+      return {
+        px: item.offsetPx,
+        label: ITEM_ACTIONS[item.item.kind],
+        perfectPx: SCORE_CONFIG.itemPerfectMs,
+        goodPx: SCORE_CONFIG.itemGoodMs,
+      };
+    }
+    return null;
+  }
+
+  private onEnterKey(): void {
+    const relay = this.relayOffset();
+    if (relay) {
+      this.judge(relay.index, judgeRelay(relay.px, SCORE_CONFIG));
+      return;
+    }
+    const item = this.itemTracker.target(this.runner.distanceKm, this.pxPerKm, RELAY_GAUGE_PX);
+    if (item) this.applyItem(this.itemTracker.press(item));
+    // 中継所やアイテムの近く以外でのエンターは何もしない
+  }
+
+  private applyItem(result: ItemResult): void {
+    const got = result.grade !== "MISS";
+    this.race.addItem(result.points, got);
+    const name = ITEM_NAMES[result.item.kind];
+    if (!got) {
+      this.showSmallPop(`${name} 取り損ね`, "#7a7a7a");
+      return;
+    }
+    const mult = sectionMultiplier(this.section.no, SCORE_CONFIG);
+    this.showPop(`${name} ${result.grade}!  +${Math.round(result.points * mult)}`, RELAY_GRADE_COLORS[result.grade]);
   }
 
   private judge(index: number, grade: RelayGrade): void {
@@ -283,6 +369,7 @@ export class RunScene extends Phaser.Scene {
 
     if (this.state === "running") {
       this.runner.update(now, delta);
+      this.updateSlopeBonus(now, delta);
       if (this.runner.finished) {
         if (this.race.isStageLastSection) this.arrive(now);
         else this.relay(now);
@@ -290,6 +377,8 @@ export class RunScene extends Phaser.Scene {
       // 中継線を越えてから押さないまま GOOD の範囲を過ぎたら MISS
       const target = this.relayOffset();
       if (target && target.px < -SCORE_CONFIG.relayGoodMs) this.judge(target.index, "MISS");
+      // アイテムも、押さないまま通り過ぎたら取り損ね
+      for (const r of this.itemTracker.missPassed(this.runner.distanceKm, this.pxPerKm)) this.applyItem(r);
     }
 
     const fallen = this.runner.isFallen(now);
@@ -318,6 +407,7 @@ export class RunScene extends Phaser.Scene {
     this.race.advance();
     this.section = this.race.section;
     this.runner.handOver(this.section);
+    this.slopeBonus = new SlopeBonus(this.section.no, SCORE_CONFIG);
     this.startedAt = now;
     this.ranPrev = true;
     this.updateSectionTitle();
@@ -397,6 +487,7 @@ export class RunScene extends Phaser.Scene {
     const inView = (x: number, margin: number) => x > -margin && x < GAME_WIDTH + margin;
     let labelIdx = 0;
     let postIdx = 0;
+    let itemIdx = 0;
     let startKm = 0;
     for (const s of stageSections) {
       const endKm = startKm + s.distanceKm;
@@ -406,6 +497,22 @@ export class RunScene extends Phaser.Scene {
         this.kmLabels[labelIdx++].setText(`${km}km`).setX(x).setVisible(true);
         r.fillStyle(0xffffff).fillRect(x - 2, GROUND_Y + 20, 4, 70);
       }
+      const tracker = this.trackerOf(s.no - 1);
+      tracker.items.forEach((item, i) => {
+        const x = toScreenX(startKm + item.km);
+        const grade = tracker.results.get(i);
+        // 取ったものは消える。取り損ねたものは薄く残す
+        if (!inView(x, 60) || itemIdx >= this.itemLabels.length || (grade && grade !== "MISS")) return;
+        const alpha = grade === "MISS" ? 0.35 : 1;
+        const labelY = this.drawItem(r, item.kind, x, alpha);
+        this.itemLabels[itemIdx++]
+          .setText(ITEM_NAMES[item.kind])
+          .setBackgroundColor(ITEM_LABEL_COLORS[item.kind])
+          .setPosition(x, labelY)
+          .setAlpha(alpha)
+          .setVisible(true);
+      });
+
       const postX = toScreenX(endKm);
       if (inView(postX, 100) && postIdx < this.postLabels.length) {
         const isGoal = s === stageSections[stageSections.length - 1];
@@ -418,23 +525,46 @@ export class RunScene extends Phaser.Scene {
     }
     for (let i = labelIdx; i < this.kmLabels.length; i++) this.kmLabels[i].setVisible(false);
     for (let i = postIdx; i < this.postLabels.length; i++) this.postLabels[i].setVisible(false);
+    for (let i = itemIdx; i < this.itemLabels.length; i++) this.itemLabels[i].setVisible(false);
   }
 
-  /** 襷ゲージ：中央の線が中継線。マーカーが線に重なった瞬間にエンター */
+  /** アイテムの目印を描く（キャラと同じく仮の図形）。看板を置く y を返す */
+  private drawItem(g: Phaser.GameObjects.Graphics, kind: ItemKind, x: number, alpha: number): number {
+    if (kind === "water") {
+      // 給水所の机とコップ
+      g.fillStyle(0x2e86de, alpha).fillRect(x - 20, GROUND_Y - 34, 40, 34);
+      g.fillStyle(0xffffff, alpha).fillRect(x - 14, GROUND_Y - 46, 8, 12).fillRect(x + 6, GROUND_Y - 46, 8, 12);
+      return GROUND_Y - 52;
+    }
+    if (kind === "cheer") {
+      // 応援の旗
+      g.fillStyle(0x7a3b2e, alpha).fillRect(x - 2, GROUND_Y - 96, 4, 96);
+      g.fillStyle(0xe67e22, alpha).fillTriangle(x + 2, GROUND_Y - 96, x + 2, GROUND_Y - 66, x + 40 * this.dir, GROUND_Y - 81);
+      return GROUND_Y - 102;
+    }
+    // 黒たまご
+    g.fillStyle(0x111111, alpha).fillEllipse(x, GROUND_Y - 16, 26, 32);
+    g.fillStyle(0xffffff, alpha * 0.5).fillEllipse(x - 5, GROUND_Y - 24, 6, 9);
+    return GROUND_Y - 38;
+  }
+
+  /** タイミングゲージ（襷・アイテム共通）：中央の線が目印。マーカーが線に重なった瞬間にエンター */
   private drawRelayGauge(): void {
     const g = this.relayGauge;
     g.clear();
-    const target = this.state === "running" ? this.relayOffset() : null;
+    const target = this.state === "running" ? this.timingTarget() : null;
     this.relayGaugeText.setVisible(target !== null);
     if (!target) return;
+    this.relayGaugeText.setText(target.label);
 
+    // 画面上部の真ん中（左右の表示の間）。コース上の看板や旗と重ならない高さ
     const cx = GAME_WIDTH / 2;
-    const y = 290;
-    const half = 200;
+    const y = 94;
+    const half = 150;
     const scale = half / RELAY_GAUGE_PX;
     g.fillStyle(0xffffff, 0.85).fillRect(cx - half, y, half * 2, 16);
-    const good = SCORE_CONFIG.relayGoodMs * scale;
-    const perfect = SCORE_CONFIG.relayPerfectMs * scale;
+    const good = target.goodPx * scale;
+    const perfect = target.perfectPx * scale;
     g.fillStyle(0x7fd67f).fillRect(cx - good, y, good * 2, 16);
     g.fillStyle(0xf2c400).fillRect(cx - perfect, y, perfect * 2, 16);
     g.fillStyle(0xc0392b).fillRect(cx - 1, y - 4, 3, 24);
@@ -472,6 +602,7 @@ export class RunScene extends Phaser.Scene {
       [
         `コンボ ${this.combo.combo}  リズム×${this.combo.multiplier.toFixed(1)}`,
         mult !== 1 ? `${this.section.no}区はポイント×${mult}` : "",
+        this.slopeBonusLabel(),
       ].join("\n"),
     );
     this.drawRelayGauge();
@@ -497,6 +628,52 @@ export class RunScene extends Phaser.Scene {
     if (sinceLast !== null) {
       p.fillStyle(sinceLast < fallMs ? 0xd84b1e : 0x10243e).fillRect(toX(sinceLast) - 2, gy - 4, 4, 20);
     }
+  }
+
+  private updateSlopeBonus(now: number, delta: number): void {
+    if (!this.slopeBonus.active) return;
+    const effort = this.runner.isFallen(now) ? 0 : this.runner.speedRatio;
+    const events = this.slopeBonus.update(this.runner.distanceKm, effort, delta);
+    this.race.setSlope(this.slopeBonus.points);
+    for (const e of events) this.showSlopeEvent(e);
+  }
+
+  private showSlopeEvent(e: SlopeBonusEvent): void {
+    if (e.kind === "summit") {
+      this.showPop(e.cleared ? `最高地点 到達！  +${e.points}` : "最高地点 到達（勢い不足）", e.cleared ? "#2e9e4f" : "#7a7a7a");
+      return;
+    }
+    // 区切りごとの結果はランナーの頭の上に小さく出す
+    const text = e.cleared ? `${e.index}/${e.total} クリア +${e.points}` : `${e.index}/${e.total} 勢い不足`;
+    this.showSmallPop(text, e.cleared ? "#2e9e4f" : "#7a7a7a");
+  }
+
+  /** ランナーの頭の上に小さく出して消える表示 */
+  private showSmallPop(text: string, color: string): void {
+    this.tweens.killTweensOf(this.slopeText);
+    this.slopeText.setText(text).setColor(color).setPosition(this.runnerX, GROUND_Y - 80).setAlpha(1).setVisible(true);
+    this.tweens.add({ targets: this.slopeText, y: GROUND_Y - 110, alpha: 0, duration: 700, delay: 200 });
+  }
+
+  /** 坂ボーナスの進み具合（坂ボーナスのない区間では空） */
+  private slopeBonusLabel(): string {
+    const b = this.slopeBonus;
+    const km = this.runner.distanceKm;
+    const pct = (v: number) => `${Math.round(v * 100)}%`;
+    if (b.climb) {
+      if (km < b.climb.fromKm) return `この先 山登り：勢い${pct(SCORE_CONFIG.hillTargetEffort)}以上で坂ボーナス`;
+      if (b.inClimb(km)) {
+        const avg = b.segmentAverage;
+        return `坂ボーナス ${b.cleared}/${b.checkpoints.length}  今の区切り ${avg === null ? "-" : pct(avg)}（目安${pct(SCORE_CONFIG.hillTargetEffort)}）`;
+      }
+      return `坂ボーナス ${b.cleared}/${b.checkpoints.length}  +${b.points}`;
+    }
+    if (b.descent) {
+      if (km < b.descent.fromKm) return `この先 山下り：転ばず勢い${pct(SCORE_CONFIG.downhillTargetEffort)}以上で坂ボーナス`;
+      const low = b.inDescent(km) && this.runner.speedRatio < SCORE_CONFIG.downhillTargetEffort;
+      return `下りキープ ${b.keptKm.toFixed(1)}km  +${b.points}${low ? "  勢い不足" : ""}`;
+    }
+    return "";
   }
 
   /** 今いる地点の坂の表示（例：「坂  上り 3.0%（権太坂）」） */

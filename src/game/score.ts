@@ -4,6 +4,8 @@
 // - タイム：区間タイムが速いほど多い（最高速で走り切ったときが満点）
 // - リズム：ジャストタイミングの間隔で連打し続けるとコンボがつながり、倍率が上がる
 // - 襷：中継線を越える瞬間にエンター。ぴったりで PERFECT、少しずれて GOOD
+// - 坂：5区の山登り・6区の山下り（slopeBonus.ts）
+// - 給水・応援・黒たまご：目印に合わせてエンター（items.ts）
 // 6区以降の区間はこれらの合計に倍率（1.2倍）をかける。
 // 10区間すべて襷をつないでゴールすると、全区間ボーナスを加える（倍率はかけない）。
 
@@ -16,6 +18,13 @@ export interface SectionScore {
   time: number;
   rhythm: number;
   relay: number;
+  /** 坂ボーナス（5区・6区） */
+  slope: number;
+  /** 給水・応援・黒たまご */
+  items: number;
+  /** 給水・応援・黒たまごを取れた数・判定した数 */
+  itemsGot: number;
+  itemsJudged: number;
   /** 襷の判定。中継所のない区間（5区・10区）やまだ判定していないときは null */
   relayGrade: RelayGrade | null;
   /** その区間でつながった最大コンボ */
@@ -23,7 +32,7 @@ export interface SectionScore {
 }
 
 export function emptySectionScore(): SectionScore {
-  return { time: 0, rhythm: 0, relay: 0, relayGrade: null, maxCombo: 0 };
+  return { time: 0, rhythm: 0, relay: 0, slope: 0, items: 0, itemsGot: 0, itemsJudged: 0, relayGrade: null, maxCombo: 0 };
 }
 
 /**
@@ -137,7 +146,7 @@ export function scoreBreakdown(
   scores.forEach((s, i) => {
     if (s === null) return;
     const no = i + 1;
-    const subtotal = s.time + s.rhythm + s.relay;
+    const subtotal = s.time + s.rhythm + s.relay + s.slope + s.items;
     const multiplier = sectionMultiplier(no, score);
     sections.push({ ...s, no, subtotal, multiplier, total: Math.round(subtotal * multiplier) });
   });

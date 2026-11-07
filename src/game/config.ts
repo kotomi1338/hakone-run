@@ -116,6 +116,25 @@ export interface ScoreConfig {
   relayGoodPoints: number;
   /** 全区間ボーナス：10区間すべて襷をつないでゴールしたときのポイント */
   fullRelayBonus: number;
+  /** 坂ボーナス（5区）：区切りごとの平均の勢いがこれ以上ならクリア（最高速の勢いが 1） */
+  hillTargetEffort: number;
+  /** 坂ボーナス（5区）：区切りを1つクリアしたときのポイント */
+  hillCheckpointPoints: number;
+  /** 坂ボーナス（5区）：最高地点に着いたとき、上り全体の平均の勢いが目安以上ならもらえるポイント */
+  summitBonus: number;
+  /** 坂ボーナス（6区）：下りでこれ以上の勢いを保てた距離にポイント */
+  downhillTargetEffort: number;
+  /** 坂ボーナス（6区）：目安以上の勢いで下った 1km あたりのポイント */
+  downhillPointsPerKm: number;
+  /** 給水・応援・黒たまご：目印とのずれがこのミリ秒以内なら PERFECT（最高速のとき。画面のピクセルと同じ） */
+  itemPerfectMs: number;
+  /** 給水・応援・黒たまご：このミリ秒以内なら GOOD。これより大きくずれると取り損ね */
+  itemGoodMs: number;
+  /** GOOD のときにもらえる割合（PERFECT の何倍か） */
+  itemGoodRatio: number;
+  waterPoints: number;
+  cheerPoints: number;
+  eggPoints: number;
   /** 6区以降に獲得したポイントの倍率 */
   secondStageMultiplier: number;
 }
