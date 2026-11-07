@@ -5,6 +5,7 @@ import { bindGameKeys, formatTime } from "./input";
 import { isSunny, ITEM_ACTIONS, ITEM_NAMES, ItemTracker, sunnyZoneOf, type ItemKind, type ItemResult } from "./items";
 import { FONT, GAME_HEIGHT, GAME_WIDTH, TEXT_COLOR } from "./layout";
 import { Race, sectionsOfStage, STAGE_NAMES } from "./race";
+import type { RankingSceneData } from "./RankingScene";
 import { Runner } from "./runner";
 import { judgeRelay, RhythmCombo, sectionMultiplier, type RelayGrade } from "./score";
 import { SlopeBonus, type SlopeBonusEvent } from "./slopeBonus";
@@ -128,6 +129,7 @@ export class RunScene extends Phaser.Scene {
   private centerText!: Phaser.GameObjects.Text;
   private subText!: Phaser.GameObjects.Text;
   private relayMessageTimer?: Phaser.Time.TimerEvent;
+  private rankingButton?: Phaser.GameObjects.Text;
 
   constructor() {
     super("RunScene");
@@ -156,6 +158,7 @@ export class RunScene extends Phaser.Scene {
     this.goalTapeBroken = false;
     this.wasInSpurt = false;
     this.lastPoints = this.race.breakdown().total;
+    this.rankingButton = undefined;
 
     // 奥から順に作る（後から作ったものが手前に描かれる）
     this.background = new Background(this, this.dir, BASE_ROAD_Y);
@@ -315,9 +318,24 @@ export class RunScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setDepth(HUD_DEPTH);
 
-    // 最初の区間のスタート前だけタイトルを出す
+    // 最初の区間のスタート前だけタイトルと「ランキングを見る」を出す
     if (!this.autoStart) {
       this.titleText.setVisible(this.race.sectionIndex === 0);
+      if (this.race.sectionIndex === 0) {
+        this.rankingButton = this.add
+          .text(GAME_WIDTH / 2, 326, "ランキングを見る ▶", {
+            fontFamily: FONT,
+            fontSize: "20px",
+            color: "#ffffff",
+            fontStyle: "bold",
+            backgroundColor: "#c0392b",
+            padding: { x: 14, y: 6 },
+          })
+          .setOrigin(0.5)
+          .setDepth(HUD_DEPTH)
+          .setInteractive({ useHandCursor: true })
+          .on("pointerdown", () => this.scene.start("RankingScene", {} satisfies RankingSceneData));
+      }
       this.tweens.add({ targets: this.centerText, scale: 1.06, duration: 600, yoyo: true, repeat: -1, ease: "Sine.InOut" });
     }
   }
@@ -533,6 +551,8 @@ export class RunScene extends Phaser.Scene {
     this.centerText.setScale(1).setVisible(false);
     this.subText.setVisible(false);
     this.titleText.setVisible(false);
+    this.rankingButton?.destroy();
+    this.rankingButton = undefined;
     this.effects.bigText("スタート！", GAME_WIDTH / 2, 236, "#c0392b", 44);
   }
 

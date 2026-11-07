@@ -57,3 +57,78 @@ body {
   font-size: 14px;
   opacity: 0.75;
 }
+
+/* ランキング登録フォーム（ゲーム画面の上に重ねる） */
+.ranking-form {
+  position: absolute;
+  left: 50%;
+  bottom: 4%;
+  transform: translateX(-50%);
+  width: min(92%, 680px);
+  padding: 8px 12px 4px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: rgba(16, 36, 62, 0.88);
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+}
+
+.ranking-form__label {
+  display: block;
+  font-size: 12px;
+  opacity: 0.85;
+  margin-bottom: 4px;
+}
+
+.ranking-form__row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ranking-form__input {
+  flex: 1 1 200px;
+  min-width: 0;
+  font: inherit;
+  font-size: 17px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 2px solid #f2c400;
+  outline: none;
+}
+
+.ranking-form button {
+  font: inherit;
+  font-size: 15px;
+  font-weight: bold;
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+}
+
+.ranking-form__submit {
+  background: #c0392b;
+  color: #fff;
+}
+
+.ranking-form__skip {
+  background: #dfe8f5;
+  color: #10243e;
+}
+
+.ranking-form button:disabled,
+.ranking-form__input:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.ranking-form__message {
+  min-height: 1.3em;
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+.ranking-form__message.is-error {
+  color: #ffb3a7;
+}

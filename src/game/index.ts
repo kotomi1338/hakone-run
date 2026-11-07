@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { GAME_HEIGHT, GAME_WIDTH } from "./layout";
+import { RankingScene } from "./RankingScene";
 import { RunScene } from "./RunScene";
 import { StageResultScene } from "./StageResultScene";
 
@@ -16,6 +17,6 @@ export function createGame(parent: HTMLElement): Phaser.Game {
     },
     // キー入力は各シーンが window で直接扱う（input.ts）
     input: { keyboard: false },
-    scene: [RunScene, StageResultScene],
+    scene: [RunScene, StageResultScene, RankingScene],
   });
 }

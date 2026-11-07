@@ -3,8 +3,12 @@ import { createTextures } from "./art/textures";
 import { bindGameKeys, formatTime } from "./input";
 import { FONT, GAME_HEIGHT, GAME_WIDTH, TEXT_COLOR } from "./layout";
 import { Race, sectionsOfStage, STAGE_NAMES, type Stage } from "./race";
+import { buildSubmission } from "./ranking";
+import { submitRanking } from "./rankingApi";
+import type { RankingSceneData } from "./RankingScene";
 import type { RunSceneData } from "./RunScene";
 import type { SectionBreakdown } from "./score";
+import { createRankingForm } from "./ui/rankingForm";
 import { Effects } from "./view/effects";
 
 export interface StageResultSceneData {
@@ -66,7 +70,8 @@ export class StageResultScene extends Phaser.Scene {
     const stages: Stage[] = final ? [1, 2] : [stage];
     stages.forEach((s, col) => {
       const x = stages.length === 1 ? GAME_WIDTH / 2 - 210 : 50 + col * 450;
-      this.drawStageTable(s, x, 112, breakdown.sections);
+      // 総合ゴールは下にランキング登録フォームが出るので、行を少し詰める
+      this.drawStageTable(s, x, 108, breakdown.sections, final ? 34 : 40);
     });
 
     const summary = final
@@ -74,11 +79,11 @@ export class StageResultScene extends Phaser.Scene {
       : `往路 合計 ${formatTime(this.race.totalMs(1))}`;
     this.reveal(
       this.add
-        .text(GAME_WIDTH / 2, 362, summary, { fontFamily: FONT, fontSize: "26px", color: TEXT_COLOR, fontStyle: "bold" })
+        .text(GAME_WIDTH / 2, final ? 314 : 362, summary, { fontFamily: FONT, fontSize: "26px", color: TEXT_COLOR, fontStyle: "bold" })
         .setOrigin(0.5, 0),
     );
     const pointLine = this.add
-      .text(GAME_WIDTH / 2, 404, "", { fontFamily: FONT, fontSize: "26px", color: "#b8860b", fontStyle: "bold" })
+      .text(GAME_WIDTH / 2, final ? 350 : 404, "", { fontFamily: FONT, fontSize: "26px", color: "#b8860b", fontStyle: "bold" })
       .setOrigin(0.5, 0);
     this.reveal(pointLine);
 
@@ -95,7 +100,8 @@ export class StageResultScene extends Phaser.Scene {
     this.tweens.add({
       targets: counter,
       value: breakdown.total,
-      delay: ROW_DELAY_MS * this.rowIndex,
+      // 行が多い総合ゴールでも待たせすぎないよう、数え上げは最大 1.5 秒後に始める
+      delay: Math.min(1500, ROW_DELAY_MS * this.rowIndex),
       duration: 1200,
       ease: "Cubic.Out",
       onUpdate: showCount,
@@ -105,11 +111,17 @@ export class StageResultScene extends Phaser.Scene {
       },
     });
 
-    const hint = final ? "Enterで1区からもう一度" : "Enterで復路（6区 芦ノ湖）スタート";
-    const hintText = this.add
-      .text(GAME_WIDTH / 2, 466, hint, { fontFamily: FONT, fontSize: "22px", color: "#c0392b", fontStyle: "bold" })
-      .setOrigin(0.5, 0);
-    this.tweens.add({ targets: hintText, alpha: 0.35, duration: 700, yoyo: true, repeat: -1, ease: "Sine.InOut" });
+    // 総合ゴール：ランキングに登録するか選ぶ。往路ゴール：Enter で復路へ
+    const canRegister = final && buildSubmission(this.race, "") !== null;
+    if (canRegister) {
+      this.showRankingForm();
+    } else {
+      const hint = final ? "Enterで1区からもう一度（途中の区間から走った記録はランキングに登録できません）" : "Enterで復路（6区 芦ノ湖）スタート";
+      const hintText = this.add
+        .text(GAME_WIDTH / 2, 466, hint, { fontFamily: FONT, fontSize: final ? "18px" : "22px", color: "#c0392b", fontStyle: "bold" })
+        .setOrigin(0.5, 0);
+      this.tweens.add({ targets: hintText, alpha: 0.35, duration: 700, yoyo: true, repeat: -1, ease: "Sine.InOut" });
+    }
 
     // 紙吹雪（総合ゴールは盛大に）
     const effects = new Effects(this);
@@ -120,7 +132,10 @@ export class StageResultScene extends Phaser.Scene {
 
     bindGameKeys(this, {
       onEnter: () => {
-        if (final) {
+        if (canRegister) {
+          // 登録するか選ぶまでは Enter で先に進まない（入力欄にカーソルを戻す）
+          this.rankingFormFocus?.();
+        } else if (final) {
           this.scene.start("RunScene", { race: new Race() } satisfies RunSceneData);
         } else {
           this.race.advance();
@@ -130,6 +145,29 @@ export class StageResultScene extends Phaser.Scene {
     });
   }
 
+  private rankingFormFocus?: () => void;
+
+  /** ランキング登録フォームをゲーム画面の上に重ねる。シーンが終わると消える */
+  private showRankingForm(): void {
+    const canvas = this.game.canvas;
+    const container = (canvas.closest(".game-frame") as HTMLElement | null) ?? canvas.parentElement;
+    if (!container) return;
+    const form = createRankingForm(container, {
+      onSubmit: async (name) => {
+        const submission = buildSubmission(this.race, name);
+        if (!submission) throw new Error("この記録は登録できません");
+        const { entry } = await submitRanking(submission);
+        this.scene.start("RankingScene", { highlight: entry } satisfies RankingSceneData);
+      },
+      onSkip: () => this.scene.start("RunScene", { race: new Race() } satisfies RunSceneData),
+    });
+    this.rankingFormFocus = form.focus;
+    // 結果の表示が落ち着いてから入力欄にカーソルを置く
+    this.time.delayedCall(600, () => form.focus());
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => form.destroy());
+    this.events.once(Phaser.Scenes.Events.DESTROY, () => form.destroy());
+  }
+
   /** 文字を、順番に横から滑り込ませて表示する */
   private reveal(text: Phaser.GameObjects.Text): void {
     const x = text.x;
@@ -137,14 +175,14 @@ export class StageResultScene extends Phaser.Scene {
     this.tweens.add({ targets: text, alpha: 1, x, delay: ROW_DELAY_MS * this.rowIndex++, duration: 260, ease: "Quad.Out" });
   }
 
-  private drawStageTable(stage: Stage, x: number, y: number, sections: SectionBreakdown[]): void {
+  private drawStageTable(stage: Stage, x: number, y: number, sections: SectionBreakdown[], rowH: number): void {
     const style = { fontFamily: FONT, fontSize: "20px", color: TEXT_COLOR };
     this.reveal(this.add.text(x, y, STAGE_NAMES[stage], { ...style, fontStyle: "bold" }));
     sectionsOfStage(stage).forEach((s, i) => {
       const time = this.race.sectionTimesMs[s.no - 1];
       const score = sections.find((b) => b.no === s.no);
       const row = `${String(s.no).padStart(2, " ")}区  ${s.from} → ${s.to}`;
-      const rowY = y + 36 + i * 40;
+      const rowY = y + 34 + i * rowH;
       this.reveal(this.add.text(x, rowY, row, style));
       this.reveal(this.add.text(x + 300, rowY, time === null ? "-" : formatTime(time), style).setOrigin(1, 0));
       this.reveal(this.add.text(x + 420, rowY, score ? `${score.total.toLocaleString()} pt` : "-", style).setOrigin(1, 0));
