@@ -42,6 +42,13 @@ export class Race {
     return SECTIONS[this.sectionIndex + 1];
   }
 
+  /** ステージのスタートから今の区間のスタート（中継所）までの距離（km） */
+  get sectionStartKm(): number {
+    return sectionsOfStage(this.stage)
+      .filter((s) => s.no < this.section.no)
+      .reduce((sum, s) => sum + s.distanceKm, 0);
+  }
+
   /** 今の区間がステージの最後（5区・10区）か */
   get isStageLastSection(): boolean {
     return this.section.no === STAGE_LAST_SECTION[this.stage];

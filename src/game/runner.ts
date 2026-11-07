@@ -59,7 +59,7 @@ export class Runner {
   fallCount = 0;
 
   private readonly config: RunConfig;
-  private readonly section: SectionConfig;
+  private section: SectionConfig;
   private readonly course: CourseConfig;
   private readonly meter: TapMeter;
   /** 最後に受け付けた連打の時刻（転んだ後や開始前は null） */
@@ -102,6 +102,18 @@ export class Runner {
     this.fastStreak = tooFast ? this.fastStreak + 1 : 0;
     this.lastTapAt = now;
     if (this.fastStreak >= this.config.fallStreak) this.fall(now);
+  }
+
+  /**
+   * 襷リレー：次の区間へ走りをそのまま引き継ぐ。
+   * 速度・勢い・連打のリズム・転倒中かどうかは残し、距離と区間ごとの回数だけ 0 に戻す。
+   */
+  handOver(next: SectionConfig): void {
+    this.section = next;
+    this.distanceKm = 0;
+    this.tapCount = 0;
+    this.rejectedTapCount = 0;
+    this.fallCount = 0;
   }
 
   rate(now: number): number {

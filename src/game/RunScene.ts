@@ -2,7 +2,7 @@ import Phaser from "phaser";
 import { COURSE_CONFIG, RUN_CONFIG, type SectionConfig } from "./config";
 import { bindGameKeys, formatTime } from "./input";
 import { FONT, GAME_HEIGHT, GAME_WIDTH, TEXT_COLOR } from "./layout";
-import { Race, STAGE_NAMES } from "./race";
+import { Race, sectionsOfStage, STAGE_NAMES } from "./race";
 import { Runner } from "./runner";
 
 const GROUND_Y = 400;
@@ -15,14 +15,16 @@ const MAX_SCROLL_PX_PER_SEC = 1000;
 const MIN_LABEL_GAP_PX = 160;
 /** 表示用の速度（最高速度のときの km/h） */
 const DISPLAY_TOP_KMH = 21;
-/** 中継所に着いてから次の区間が始まるまで（ミリ秒） */
-const RELAY_PAUSE_MS = 1500;
+/** ゴール（5区・10区）に着いてから結果画面に移るまで（ミリ秒） */
+const GOAL_PAUSE_MS = 1500;
+/** 襷リレーの表示を出しておく時間（ミリ秒）。走りは止まらない */
+const RELAY_MESSAGE_MS = 1500;
 
 type State = "ready" | "running" | "arrived";
 
 export interface RunSceneData {
   race?: Race;
-  /** true ならスペース待ちをせず、すぐに区間をスタートする（襷リレー後など） */
+  /** true ならスペース待ちをせず、すぐに区間をスタートする（復路のスタートなど） */
   autoStart?: boolean;
 }
 
@@ -41,7 +43,10 @@ export class RunScene extends Phaser.Scene {
   private bg!: Phaser.GameObjects.Graphics;
   private road!: Phaser.GameObjects.Graphics;
   private kmLabels: Phaser.GameObjects.Text[] = [];
-  private goalLabel!: Phaser.GameObjects.Text;
+  /** 中継所・ゴールの看板（画面に同時に映るのはせいぜい2つ） */
+  private postLabels: Phaser.GameObjects.Text[] = [];
+  private sectionTitle!: Phaser.GameObjects.Text;
+  private relayMessageTimer?: Phaser.Time.TimerEvent;
   private runnerRect!: Phaser.GameObjects.Rectangle;
   private hud!: Phaser.GameObjects.Text;
   private progressBar!: Phaser.GameObjects.Graphics;
@@ -72,16 +77,17 @@ export class RunScene extends Phaser.Scene {
         .text(0, GROUND_Y + 92, "", { fontFamily: FONT, fontSize: "18px", color: "#ffffff" })
         .setOrigin(0.5, 0),
     );
-    const goalName = this.race.isStageLastSection ? `${this.section.to} ゴール` : `${this.section.to}中継所`;
-    this.goalLabel = this.add
-      .text(0, GROUND_Y - 150, goalName, {
-        fontFamily: FONT,
-        fontSize: "22px",
-        color: "#ffffff",
-        backgroundColor: "#c0392b",
-        padding: { x: 10, y: 4 },
-      })
-      .setOrigin(0.5, 1);
+    this.postLabels = Array.from({ length: 3 }, () =>
+      this.add
+        .text(0, GROUND_Y - 150, "", {
+          fontFamily: FONT,
+          fontSize: "22px",
+          color: "#ffffff",
+          backgroundColor: "#c0392b",
+          padding: { x: 10, y: 4 },
+        })
+        .setOrigin(0.5, 1),
+    );
 
     this.runnerRect = this.add
       .rectangle(this.runnerX, GROUND_Y, RUNNER_SIZE, RUNNER_SIZE, 0x1e5bd8)
@@ -94,12 +100,13 @@ export class RunScene extends Phaser.Scene {
       fontSize: "15px",
       color: TEXT_COLOR,
     });
-    this.add.text(24, 32, `${this.section.no}区  ${this.section.from} → ${this.section.to}（${this.section.distanceKm}km）`, {
+    this.sectionTitle = this.add.text(24, 32, "", {
       fontFamily: FONT,
       fontSize: "22px",
       color: TEXT_COLOR,
       fontStyle: "bold",
     });
+    this.updateSectionTitle();
     this.hud = this.add.text(24, 70, "", {
       fontFamily: FONT,
       fontSize: "18px",
@@ -162,7 +169,10 @@ export class RunScene extends Phaser.Scene {
 
     if (this.state === "running") {
       this.runner.update(now, delta);
-      if (this.runner.finished) this.arrive(now);
+      if (this.runner.finished) {
+        if (this.race.isStageLastSection) this.arrive(now);
+        else this.relay(now);
+      }
     }
 
     const fallen = this.runner.isFallen(now);
@@ -176,38 +186,63 @@ export class RunScene extends Phaser.Scene {
     this.drawHud(now);
   }
 
-  /** 中継所（またはゴール）に着いた。タイムを記録して、少し待ってから次へ */
+  private updateSectionTitle(): void {
+    const s = this.section;
+    this.sectionTitle.setText(`${s.no}区  ${s.from} → ${s.to}（${s.distanceKm}km）`);
+  }
+
+  /** 中継所を通過：走りは止めずに襷を渡し、そのまま次の区間を走る */
+  private relay(now: number): void {
+    const time = now - this.startedAt;
+    const from = this.section;
+    const taps = this.runner.tapCount;
+    const falls = this.runner.fallCount;
+    this.race.recordSection(time);
+    this.race.advance();
+    this.section = this.race.section;
+    this.runner.handOver(this.section);
+    this.startedAt = now;
+    this.updateSectionTitle();
+
+    this.centerText.setText(`襷リレー！  ${from.no}区 → ${this.section.no}区`).setVisible(true);
+    this.subText
+      .setText(`${from.no}区 区間タイム ${formatTime(time)}   連打 ${taps}回 / 転倒 ${falls}回`)
+      .setVisible(true);
+    this.relayMessageTimer?.remove();
+    this.relayMessageTimer = this.time.delayedCall(RELAY_MESSAGE_MS, () => {
+      if (this.state !== "running") return;
+      this.centerText.setVisible(false);
+      this.subText.setVisible(false);
+    });
+  }
+
+  /** ステージのゴール（5区・10区）に着いた。タイムを記録して、少し待ってから結果画面へ */
   private arrive(now: number): void {
     this.state = "arrived";
     this.arrivedAt = now;
     const time = this.arrivedAt - this.startedAt;
     this.race.recordSection(time);
+    this.relayMessageTimer?.remove();
 
-    const next = this.race.nextSection;
-    if (this.race.isStageLastSection) {
-      const label = this.race.stage === 1 ? "往路ゴール！" : "総合ゴール！";
-      this.centerText.setText(`${this.section.to} ${label}`).setVisible(true);
-    } else if (next) {
-      this.centerText.setText(`襷リレー！  ${this.section.no}区 → ${next.no}区`).setVisible(true);
-    }
+    const label = this.race.stage === 1 ? "往路ゴール！" : "総合ゴール！";
+    this.centerText.setText(`${this.section.to} ${label}`).setVisible(true);
     this.subText
       .setText(`区間タイム ${formatTime(time)}   連打 ${this.runner.tapCount}回 / 転倒 ${this.runner.fallCount}回`)
       .setVisible(true);
 
-    this.time.delayedCall(RELAY_PAUSE_MS, () => {
-      if (this.race.isStageLastSection) {
-        this.scene.start("StageResultScene", { race: this.race });
-      } else {
-        this.race.advance();
-        this.scene.restart({ race: this.race, autoStart: true } satisfies RunSceneData);
-      }
+    this.time.delayedCall(GOAL_PAUSE_MS, () => {
+      this.scene.start("StageResultScene", { race: this.race });
     });
   }
 
   private drawWorld(): void {
     // 画面上で 1km を何ピクセルで描くか（管理画面で縮尺を変えるとその場で変わる）
     const pxPerKm = MAX_SCROLL_PX_PER_SEC * COURSE_CONFIG.secondsPerKm;
-    const offsetPx = this.runner.distanceKm * pxPerKm;
+    // ステージ全体を1本の道として描く（中継所を通過しても景色がつながる）
+    const sectionStartKm = this.race.sectionStartKm;
+    const offsetPx = (sectionStartKm + this.runner.distanceKm) * pxPerKm;
+    /** ステージのスタートから worldKm の地点の画面上の x */
+    const toScreenX = (worldKm: number) => this.mx(worldKm * pxPerKm - offsetPx + RUNNER_MARGIN_X);
 
     // 以下は右向き（往路）として位置を計算し、mx() で復路のときは左右反転する
     // 遠景のビル（ゆっくり流れる）
@@ -238,28 +273,33 @@ export class RunScene extends Phaser.Scene {
       r.fillRect(this.mx(i * dash - offsetPx, dash / 2), GROUND_Y + 66, dash / 2, 6);
     }
 
-    // 距離表示（スタートからの km）
+    // 距離表示（各区間のスタートからの km）と、中継所・ゴール
+    const stageSections = sectionsOfStage(this.race.stage);
     const stepKm = Math.max(1, Math.ceil(MIN_LABEL_GAP_PX / pxPerKm));
-    const firstKm = Math.floor((offsetPx - RUNNER_MARGIN_X) / pxPerKm / stepKm) * stepKm;
-    this.kmLabels.forEach((label, idx) => {
-      const km = firstKm + idx * stepKm;
-      const x = this.mx(km * pxPerKm - offsetPx + RUNNER_MARGIN_X);
-      const visible = km > 0 && km < this.section.distanceKm && x > -50 && x < GAME_WIDTH + 50;
-      label.setVisible(visible);
-      if (!visible) return;
-      label.setText(`${km}km`).setX(x);
-      r.fillStyle(0xffffff).fillRect(x - 2, GROUND_Y + 20, 4, 70);
-    });
-
-    // ゴール（中継所）
-    const goalX = this.mx(this.section.distanceKm * pxPerKm - offsetPx + RUNNER_MARGIN_X);
-    const goalVisible = goalX > -100 && goalX < GAME_WIDTH + 100;
-    this.goalLabel.setVisible(goalVisible).setX(goalX);
-    if (goalVisible) {
-      r.fillStyle(0xffffff).fillRect(goalX - 3, GROUND_Y + 20, 6, 120);
-      r.fillStyle(0x7a3b2e).fillRect(goalX - 70, GROUND_Y - 150, 6, 150);
-      r.fillRect(goalX + 64, GROUND_Y - 150, 6, 150);
+    const inView = (x: number, margin: number) => x > -margin && x < GAME_WIDTH + margin;
+    let labelIdx = 0;
+    let postIdx = 0;
+    let startKm = 0;
+    for (const s of stageSections) {
+      const endKm = startKm + s.distanceKm;
+      for (let km = stepKm; km < s.distanceKm && labelIdx < this.kmLabels.length; km += stepKm) {
+        const x = toScreenX(startKm + km);
+        if (!inView(x, 50)) continue;
+        this.kmLabels[labelIdx++].setText(`${km}km`).setX(x).setVisible(true);
+        r.fillStyle(0xffffff).fillRect(x - 2, GROUND_Y + 20, 4, 70);
+      }
+      const postX = toScreenX(endKm);
+      if (inView(postX, 100) && postIdx < this.postLabels.length) {
+        const isGoal = s === stageSections[stageSections.length - 1];
+        this.postLabels[postIdx++].setText(isGoal ? `${s.to} ゴール` : `${s.to}中継所`).setX(postX).setVisible(true);
+        r.fillStyle(0xffffff).fillRect(postX - 3, GROUND_Y + 20, 6, 120);
+        r.fillStyle(0x7a3b2e).fillRect(postX - 70, GROUND_Y - 150, 6, 150);
+        r.fillRect(postX + 64, GROUND_Y - 150, 6, 150);
+      }
+      startKm = endKm;
     }
+    for (let i = labelIdx; i < this.kmLabels.length; i++) this.kmLabels[i].setVisible(false);
+    for (let i = postIdx; i < this.postLabels.length; i++) this.postLabels[i].setVisible(false);
   }
 
   private drawHud(now: number): void {
