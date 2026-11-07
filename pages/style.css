@@ -25,11 +25,26 @@ body {
   box-sizing: border-box;
 }
 
-.game-root {
+.game-frame {
+  position: relative;
   width: 100%;
   max-width: 960px;
+}
+
+.game-root {
+  width: 100%;
   aspect-ratio: 16 / 9;
   max-height: calc(100svh - 80px);
+}
+
+.game-loading {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  opacity: 0.8;
 }
 
 .game-root canvas {
