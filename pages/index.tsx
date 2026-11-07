@@ -7,15 +7,24 @@ export default function HomePage() {
   useEffect(() => {
     let cancelled = false;
     let game: { destroy(removeCanvas: boolean): void } | undefined;
+    let destroyAdmin: (() => void) | undefined;
 
     import("../src/game").then(({ createGame }) => {
       if (cancelled || !rootRef.current) return;
       game = createGame(rootRef.current);
     });
 
+    // 管理画面は開発時だけ読み込む（公開版のビルドには含まれない）
+    if (import.meta.env.DEV) {
+      import("../src/game/admin").then(({ setupAdmin }) => {
+        if (!cancelled) destroyAdmin = setupAdmin();
+      });
+    }
+
     return () => {
       cancelled = true;
       game?.destroy(true);
+      destroyAdmin?.();
     };
   }, []);
 

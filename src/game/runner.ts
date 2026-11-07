@@ -1,6 +1,6 @@
 // 連打 → 速度 → 距離 の計算。画面（Phaser）に依存しない純粋なロジック。
 
-import type { RunConfig, SectionConfig } from "./config";
+import { COURSE_CONFIG, type CourseConfig, type RunConfig, type SectionConfig } from "./config";
 
 /** 直近 windowMs の連打を記録して、1秒あたりの連打回数を出す */
 export class TapMeter {
@@ -60,6 +60,7 @@ export class Runner {
 
   private readonly config: RunConfig;
   private readonly section: SectionConfig;
+  private readonly course: CourseConfig;
   private readonly meter: TapMeter;
   /** 最後に受け付けた連打の時刻（転んだ後や開始前は null） */
   lastTapAt: number | null = null;
@@ -68,9 +69,10 @@ export class Runner {
 
   private fallenUntil = -Infinity;
 
-  constructor(config: RunConfig, section: SectionConfig) {
+  constructor(config: RunConfig, section: SectionConfig, course: CourseConfig = COURSE_CONFIG) {
     this.config = config;
     this.section = section;
+    this.course = course;
     this.meter = new TapMeter(config);
   }
 
@@ -84,7 +86,7 @@ export class Runner {
 
   /** 最高速度で走ったときの 1秒あたりの距離（km） */
   get maxKmPerSec(): number {
-    return this.section.distanceKm / this.section.targetSeconds;
+    return 1 / this.course.secondsPerKm;
   }
 
   tap(now: number): void {

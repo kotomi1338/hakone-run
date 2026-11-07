@@ -5,10 +5,23 @@ export interface SectionConfig {
   no: number;
   from: string;
   to: string;
-  /** 実際の距離（km） */
+  /** 実際の箱根駅伝の距離（km）。ゲーム内の長さはこの距離 × 縮尺で決まる */
   distanceKm: number;
-  /** 理想的な連打を続けたときに走り切るまでの秒数 */
-  targetSeconds: number;
+}
+
+export interface CourseConfig {
+  /** 縮尺：最高速度で 1km を走り切る秒数。全区間共通で、区間の長さの比率は実際の距離どおりになる */
+  secondsPerKm: number;
+}
+
+/** 1区（21.3km）を最高速で約5秒 */
+export const COURSE_CONFIG: CourseConfig = {
+  secondsPerKm: 0.235,
+};
+
+/** 最高速度で走ったときに区間を走り切る秒数 */
+export function sectionSeconds(section: SectionConfig, course: CourseConfig = COURSE_CONFIG): number {
+  return section.distanceKm * course.secondsPerKm;
 }
 
 export interface RunConfig {
@@ -18,6 +31,8 @@ export interface RunConfig {
   momentumMs: number;
   /** この連打回数/秒を続けると最高速度になる */
   optimalRate: number;
+  /** 連打のジャストタイミング：リズムボーナスの基準になる押す間隔（ミリ秒） */
+  justIntervalMs: number;
   /** 前回の連打からこの時間（ミリ秒）より早く押すと「押しすぎ」になる */
   fallIntervalMs: number;
   /** 「押しすぎ」がこの回数続くと転ぶ */
@@ -30,18 +45,26 @@ export interface RunConfig {
   speedSmoothingMs: number;
 }
 
-export const SECTION_1: SectionConfig = {
-  no: 1,
-  from: "大手町",
-  to: "鶴見",
-  distanceKm: 21.3,
-  targetSeconds: 10,
-};
+/** 全10区間。距離は実際の箱根駅伝に準拠 */
+export const SECTIONS: SectionConfig[] = [
+  { no: 1, from: "大手町", to: "鶴見", distanceKm: 21.3 },
+  { no: 2, from: "鶴見", to: "戸塚", distanceKm: 23.1 },
+  { no: 3, from: "戸塚", to: "平塚", distanceKm: 21.4 },
+  { no: 4, from: "平塚", to: "小田原", distanceKm: 20.9 },
+  { no: 5, from: "小田原", to: "芦ノ湖", distanceKm: 20.8 },
+  { no: 6, from: "芦ノ湖", to: "小田原", distanceKm: 20.8 },
+  { no: 7, from: "小田原", to: "平塚", distanceKm: 21.3 },
+  { no: 8, from: "平塚", to: "戸塚", distanceKm: 21.4 },
+  { no: 9, from: "戸塚", to: "鶴見", distanceKm: 23.1 },
+  { no: 10, from: "鶴見", to: "大手町", distanceKm: 23.0 },
+];
+
 
 export const RUN_CONFIG: RunConfig = {
   windowMs: 1000,
   momentumMs: 5000,
   optimalRate: 2,
+  justIntervalMs: 500,
   fallIntervalMs: 500,
   fallStreak: 4,
   fallDurationMs: 1500,

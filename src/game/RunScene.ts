@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { RUN_CONFIG, SECTION_1, type SectionConfig } from "./config";
+import { COURSE_CONFIG, RUN_CONFIG, SECTIONS, type SectionConfig } from "./config";
 import { Runner } from "./runner";
 
 export const GAME_WIDTH = 960;
@@ -9,15 +9,17 @@ const FONT = '"Hiragino Sans", "Noto Sans JP", "Yu Gothic", sans-serif';
 const GROUND_Y = 400;
 const RUNNER_X = 240;
 const RUNNER_SIZE = 48;
-/** 画面上で 1km を何ピクセルで描くか */
-const PX_PER_KM = 800;
+/** 最高速度のとき画面が1秒に流れるピクセル数（縮尺を変えても見た目の速さは一定） */
+const MAX_SCROLL_PX_PER_SEC = 1000;
+/** 距離表示どうしの最小間隔（ピクセル） */
+const MIN_LABEL_GAP_PX = 160;
 /** 表示用の速度（最高速度のときの km/h） */
 const DISPLAY_TOP_KMH = 21;
 
 type State = "ready" | "running" | "finished";
 
 export class RunScene extends Phaser.Scene {
-  private section: SectionConfig = SECTION_1;
+  private section: SectionConfig = SECTIONS[0];
   private runner!: Runner;
   private state: State = "ready";
   private startedAt = 0;
@@ -46,7 +48,7 @@ export class RunScene extends Phaser.Scene {
     this.cameras.main.setBackgroundColor("#bfe3ff");
     this.bg = this.add.graphics();
     this.road = this.add.graphics();
-    this.kmLabels = Array.from({ length: 4 }, () =>
+    this.kmLabels = Array.from({ length: 8 }, () =>
       this.add
         .text(0, GROUND_Y + 92, "", { fontFamily: FONT, fontSize: "18px", color: "#ffffff" })
         .setOrigin(0.5, 0),
@@ -111,6 +113,9 @@ export class RunScene extends Phaser.Scene {
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
+    // 管理画面などの入力欄に文字を打っているときはゲーム操作として扱わない
+    if (isEditableTarget(e.target)) return;
+
     const isSpace = e.code === "Space";
     const isEnter = e.code === "Enter" || e.code === "NumpadEnter";
     if (!isSpace && !isEnter) return;
@@ -167,7 +172,9 @@ export class RunScene extends Phaser.Scene {
   }
 
   private drawWorld(): void {
-    const offsetPx = this.runner.distanceKm * PX_PER_KM;
+    // 画面上で 1km を何ピクセルで描くか（管理画面で縮尺を変えるとその場で変わる）
+    const pxPerKm = MAX_SCROLL_PX_PER_SEC * COURSE_CONFIG.secondsPerKm;
+    const offsetPx = this.runner.distanceKm * pxPerKm;
 
     // 遠景のビル（ゆっくり流れる）
     const g = this.bg;
@@ -198,10 +205,11 @@ export class RunScene extends Phaser.Scene {
     }
 
     // 1kmごとの距離表示
-    const firstKm = Math.floor((offsetPx - RUNNER_X) / PX_PER_KM);
+    const stepKm = Math.max(1, Math.ceil(MIN_LABEL_GAP_PX / pxPerKm));
+    const firstKm = Math.floor((offsetPx - RUNNER_X) / pxPerKm / stepKm) * stepKm;
     this.kmLabels.forEach((label, idx) => {
-      const km = firstKm + idx;
-      const x = km * PX_PER_KM - offsetPx + RUNNER_X;
+      const km = firstKm + idx * stepKm;
+      const x = km * pxPerKm - offsetPx + RUNNER_X;
       const visible = km > 0 && km < this.section.distanceKm && x > -50 && x < GAME_WIDTH + 50;
       label.setVisible(visible);
       if (!visible) return;
@@ -210,7 +218,7 @@ export class RunScene extends Phaser.Scene {
     });
 
     // ゴール（中継所）
-    const goalX = this.section.distanceKm * PX_PER_KM - offsetPx + RUNNER_X;
+    const goalX = this.section.distanceKm * pxPerKm - offsetPx + RUNNER_X;
     const goalVisible = goalX > -100 && goalX < GAME_WIDTH + 100;
     this.goalLabel.setVisible(goalVisible).setX(goalX);
     if (goalVisible) {
@@ -249,15 +257,22 @@ export class RunScene extends Phaser.Scene {
 
     // 押す間隔ゲージ：前回の連打からの経過時間。赤（早すぎ）を抜けて緑になってから押す
     const gy = 52;
-    const gaugeMaxMs = RUN_CONFIG.fallIntervalMs * 2;
+    const gaugeMaxMs = Math.max(RUN_CONFIG.fallIntervalMs * 2, RUN_CONFIG.justIntervalMs * 1.5);
     const toX = (ms: number) => x + (w * Math.min(ms, gaugeMaxMs)) / gaugeMaxMs;
     const okX = toX(RUN_CONFIG.fallIntervalMs);
     p.fillStyle(0xf08a8a).fillRect(x, gy, okX - x, 12);
     p.fillStyle(0x7fd67f).fillRect(okX, gy, x + w - okX, 12);
+    // ジャストタイミングの目印
+    p.fillStyle(0xf2c400).fillRect(toX(RUN_CONFIG.justIntervalMs) - 1, gy - 2, 3, 16);
     if (sinceLast !== null) {
       p.fillStyle(sinceLast < RUN_CONFIG.fallIntervalMs ? 0xd84b1e : 0x10243e).fillRect(toX(sinceLast) - 2, gy - 4, 4, 20);
     }
   }
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
 }
 
 function formatTime(ms: number): string {
