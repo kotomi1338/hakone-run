@@ -1,4 +1,13 @@
-// ゲームの調整用パラメータ。後で管理画面（lil-gui）から書き換える前提で1か所にまとめる。
+// ゲームの調整用パラメータ。管理画面（lil-gui）から書き換える前提で1か所にまとめる。
+// 調整できる値の初期値は settings.json にある。管理画面の「現在の設定で保存」でこのファイルが更新される。
+
+import settings from "./settings.json";
+
+/** 管理画面で調整・保存する設定一式（settings.json の形） */
+export interface Settings {
+  course: CourseConfig;
+  run: RunConfig;
+}
 
 export interface SectionConfig {
   /** 区間番号（1〜10） */
@@ -14,10 +23,7 @@ export interface CourseConfig {
   secondsPerKm: number;
 }
 
-/** 1区（21.3km）を最高速で約5秒 */
-export const COURSE_CONFIG: CourseConfig = {
-  secondsPerKm: 0.235,
-};
+export const COURSE_CONFIG: CourseConfig = { ...settings.course };
 
 /** 最高速度で走ったときに区間を走り切る秒数 */
 export function sectionSeconds(section: SectionConfig, course: CourseConfig = COURSE_CONFIG): number {
@@ -59,15 +65,27 @@ export const SECTIONS: SectionConfig[] = [
   { no: 10, from: "鶴見", to: "大手町", distanceKm: 23.0 },
 ];
 
+export const RUN_CONFIG: RunConfig = { ...settings.run };
 
-export const RUN_CONFIG: RunConfig = {
-  windowMs: 1000,
-  momentumMs: 5000,
-  optimalRate: 2,
-  justIntervalMs: 500,
-  fallIntervalMs: 500,
-  fallStreak: 4,
-  fallDurationMs: 1500,
-  maxRate: 10,
-  speedSmoothingMs: 200,
-};
+/** 今の設定値のコピー */
+export function snapshotSettings(): Settings {
+  return { course: { ...COURSE_CONFIG }, run: { ...RUN_CONFIG } };
+}
+
+/** 設定値を上書きする。知らないキーや数値でない値は無視する */
+export function applySettings(input: unknown): void {
+  if (typeof input !== "object" || input === null) return;
+  const src = input as Record<string, unknown>;
+  assignNumbers(COURSE_CONFIG, src.course);
+  assignNumbers(RUN_CONFIG, src.run);
+}
+
+function assignNumbers<T extends object>(target: T, source: unknown): void {
+  if (typeof source !== "object" || source === null) return;
+  for (const key of Object.keys(target) as (keyof T)[]) {
+    const value = (source as Record<string, unknown>)[key as string];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      (target as Record<keyof T, number>)[key] = value;
+    }
+  }
+}

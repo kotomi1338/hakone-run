@@ -1,0 +1,16 @@
+{
+  "course": {
+    "secondsPerKm": 0.235
+  },
+  "run": {
+    "windowMs": 1000,
+    "momentumMs": 5000,
+    "optimalRate": 2,
+    "justIntervalMs": 500,
+    "fallIntervalMs": 500,
+    "fallStreak": 4,
+    "fallDurationMs": 300,
+    "maxRate": 10,
+    "speedSmoothingMs": 200
+  }
+}

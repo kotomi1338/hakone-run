@@ -1,10 +1,54 @@
 // 開発用の管理画面。import.meta.env.DEV のときだけ読み込み、公開版には含めない。
 // 設定オブジェクトを直接書き換えるので、プレイ中でもその場で反映される。
+//
+// 設定の保存先は2つ：
+// - ブラウザ（localStorage）：値を変えるたびに自動で保存。再読み込みしても残る
+// - settings.json：「現在の設定で保存」ボタンで書き込む。コミットすれば公開版にも反映される
 
 import GUI from "lil-gui";
-import { COURSE_CONFIG, RUN_CONFIG, SECTIONS, sectionSeconds } from "./config";
+import {
+  applySettings,
+  COURSE_CONFIG,
+  RUN_CONFIG,
+  SECTIONS,
+  sectionSeconds,
+  snapshotSettings,
+} from "./config";
+import fileSettings from "./settings.json";
+
+const STORAGE_KEY = "hakone-run:admin-settings";
+/** devtools/settings-plugin.ts の SETTINGS_ENDPOINT と同じ */
+const SAVE_ENDPOINT = "/__dev/settings";
+
+function loadFromBrowser(): void {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) applySettings(JSON.parse(saved));
+  } catch {
+    // 保存データが壊れている・使えない環境なら settings.json の値のまま
+  }
+}
+
+function saveToBrowser(): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshotSettings()));
+  } catch {
+    // 保存できない環境（プライベートウィンドウなど）では何もしない
+  }
+}
+
+function clearBrowser(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // 何もしない
+  }
+}
 
 export function setupAdmin(): () => void {
+  // ブラウザに保存した値を、管理画面を作る前に反映する
+  loadFromBrowser();
+
   const gui = new GUI({ title: "管理画面（開発用）" });
 
   // コースの縮尺：距離は実際の箱根駅伝のまま、全区間まとめて長さを変える
@@ -46,6 +90,43 @@ export function setupAdmin(): () => void {
   run.add(RUN_CONFIG, "fallDurationMs", 0, 5000, 100).name("転倒時間(ms)");
   run.add(RUN_CONFIG, "maxRate", 1, 30, 1).name("連打上限(回/秒)");
   run.close();
+
+  // 値を変えたら自動でブラウザに保存
+  gui.onFinishChange(saveToBrowser);
+
+  const status = { message: "変更はブラウザに自動保存されます" };
+  const refresh = () => {
+    updatePreview();
+    for (const c of gui.controllersRecursive()) c.updateDisplay();
+  };
+  const actions = {
+    saveToFile: async () => {
+      status.message = "保存中…";
+      try {
+        const res = await fetch(SAVE_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(snapshotSettings()),
+        });
+        const result = (await res.json()) as { ok: boolean; error?: string };
+        if (!result.ok) throw new Error(result.error);
+        saveToBrowser();
+        status.message = "settings.json に保存しました";
+      } catch (error) {
+        status.message = `保存に失敗しました：${String(error)}`;
+      }
+    },
+    resetToFile: () => {
+      clearBrowser();
+      applySettings(fileSettings);
+      refresh();
+      status.message = "settings.json の値に戻しました";
+    },
+  };
+  const save = gui.addFolder("設定の保存");
+  save.add(status, "message").name("状態").listen().disable();
+  save.add(actions, "saveToFile").name("現在の設定で保存（settings.json）");
+  save.add(actions, "resetToFile").name("settings.json の値に戻す");
 
   return () => gui.destroy();
 }
