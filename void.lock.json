@@ -3,7 +3,16 @@
   "source": {},
   "resolved": {
     "account_id": "dabc216fd4f0e1cf3ac4c6687f5098f2",
-    "compatibility_date": "2026-02-24"
+    "compatibility_date": "2026-02-24",
+    "d1_databases": [
+      {
+        "binding": "DB",
+        "database_name": "hakone-run-db",
+        "database_id": "3d094acf-0e3f-4937-a877-19f99e7a3600",
+        "migrations_dir": "./db/migrations"
+      }
+    ],
+    "name": "hakone-run"
   },
-  "text": "{\n  \"account_id\": \"dabc216fd4f0e1cf3ac4c6687f5098f2\",\n  \"compatibility_date\": \"2026-02-24\"\n}\n"
+  "text": "{\n  \"account_id\": \"dabc216fd4f0e1cf3ac4c6687f5098f2\",\n  \"compatibility_date\": \"2026-02-24\",\n  \"d1_databases\": [\n    {\n      \"binding\": \"DB\",\n      \"database_name\": \"hakone-run-db\",\n      \"database_id\": \"3d094acf-0e3f-4937-a877-19f99e7a3600\",\n      \"migrations_dir\": \"./db/migrations\"\n    }\n  ],\n  \"name\": \"hakone-run\"\n}\n"
 }

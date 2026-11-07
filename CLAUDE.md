@@ -1,0 +1,3 @@
+- 仕様は docs/spec.md を参照
+- 技術スタックはVoid・Phaser・TypeScript
+- 1機能ずつ実装して動作確認する
