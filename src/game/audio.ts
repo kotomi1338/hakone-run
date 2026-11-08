@@ -3,6 +3,8 @@
 //   public/audio/bgm.wav    レース中の BGM（ループ再生）
 //   public/audio/start.mp3  レース開始の音
 //   public/audio/click.mp3  クリック音（ボタンや、Enter で次の画面へ進むとき）
+//   public/audio/goal1.mp3  往路ゴール（5区を走り切ったとき）
+//   public/audio/goal2.mp3  総合ゴール（10区を走り切ったとき）
 
 import type Phaser from "phaser";
 import { AUDIO_CONFIG } from "./config";
@@ -11,6 +13,8 @@ export const SOUND_FILES = {
   bgm: "/audio/bgm.wav",
   start: "/audio/start.mp3",
   click: "/audio/click.mp3",
+  goal1: "/audio/goal1.mp3",
+  goal2: "/audio/goal2.mp3",
 } as const;
 
 type SoundKey = keyof typeof SOUND_FILES;
@@ -27,7 +31,7 @@ export function preloadSounds(scene: Phaser.Scene): void {
   scene.load.on("loaderror", (file: Phaser.Loader.File) => {
     if (file.key in SOUND_FILES) missing.add(file.key as SoundKey);
   });
-  for (const key of ["start", "click"] as const) {
+  for (const key of ["start", "click", "goal1", "goal2"] as const) {
     if (!scene.cache.audio.exists(key) && !missing.has(key)) scene.load.audio(key, SOUND_FILES[key]);
   }
 }

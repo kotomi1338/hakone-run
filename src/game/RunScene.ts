@@ -748,6 +748,8 @@ export class RunScene extends Phaser.Scene {
     }
 
     stopBgm(this);
+    // 往路ゴール（5区）と総合ゴール（10区）で違うゴールの音
+    playSe(this, this.race.stage === 1 ? "goal1" : "goal2");
 
     // ゴールテープを切って紙吹雪
     this.goalTapeBroken = true;
