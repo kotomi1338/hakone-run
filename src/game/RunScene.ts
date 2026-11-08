@@ -477,6 +477,7 @@ export class RunScene extends Phaser.Scene {
       }
     } else if (result === "fell") {
       this.combo.break();
+      this.race.addFall();
       const y = this.laneY(this.runnerWorldKm);
       this.effects.dust(this.runnerX, y, 18);
       this.effects.bigText("転倒！", this.runnerX, y - 110, "#d84b1e", 30);

@@ -1,10 +1,11 @@
 // ランキング API
 //   GET  /api/rankings?limit=20  … 上位の記録（ポイントの多い順 → タイムの速い順 → 先に登録した順）
+//   GET  /api/rankings?points=12345&timeMs=67890 … その記録を今登録したら何位になるか（登録はしない）
 //   POST /api/rankings           … 記録を登録する。サーバーでルールどおりの記録か確かめてから保存する
 
 import { rankings } from "@schema";
 import { defineHandler } from "void";
-import { and, asc, count, db, desc, eq, gt, lt, or } from "void/db";
+import { and, asc, count, db, desc, eq, gt, lt, lte, or } from "void/db";
 import { z } from "zod";
 import { validateSubmission } from "../../../src/game/ranking";
 
@@ -25,9 +26,22 @@ const publicColumns = {
   createdAt: rankings.createdAt,
 };
 
+const digits = z.string().regex(/^\d+$/);
+
 export const GET = defineHandler.withValidator({
-  query: z.object({ limit: z.string().regex(/^\d+$/).optional() }),
+  query: z.object({ limit: digits.optional(), points: digits.optional(), timeMs: digits.optional() }),
 })(async (_c, { query }) => {
+  if (query.points !== undefined && query.timeMs !== undefined) {
+    // 同じポイント・同じタイムの記録がすでにあれば、先に登録したほうが上なので、その下になる
+    const points = Number(query.points);
+    const timeMs = Number(query.timeMs);
+    const [{ above }] = await db
+      .select({ above: count() })
+      .from(rankings)
+      .where(or(gt(rankings.points, points), and(eq(rankings.points, points), lte(rankings.timeMs, timeMs))));
+    const [{ total }] = await db.select({ total: count() }).from(rankings);
+    return { rank: above + 1, total };
+  }
   const limit = Math.min(MAX_LIMIT, Math.max(1, Number(query.limit ?? 20)));
   const entries = await db.select(publicColumns).from(rankings).orderBy(...order).limit(limit);
   const [{ total }] = await db.select({ total: count() }).from(rankings);

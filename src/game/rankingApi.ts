@@ -13,7 +13,16 @@ export interface RankedEntry {
 }
 
 export async function fetchRankings(limit: number): Promise<{ entries: RankedEntry[]; total: number }> {
-  return fetch("/api/rankings", { query: { limit: String(limit) } });
+  const result = await fetch("/api/rankings", { query: { limit: String(limit) } });
+  if (!result.entries) throw new Error("ランキングを取得できませんでした");
+  return { entries: result.entries, total: result.total };
+}
+
+/** その記録を今登録したら何位になるか（登録はしない）。total は今の登録件数 */
+export async function fetchRankFor(points: number, timeMs: number): Promise<{ rank: number; total: number }> {
+  const result = await fetch("/api/rankings", { query: { points: String(points), timeMs: String(Math.round(timeMs)) } });
+  if (result.rank === undefined) throw new Error("順位を取得できませんでした");
+  return { rank: result.rank, total: result.total };
 }
 
 /** 記録を登録する。サーバーに弾かれたら、その理由をメッセージにした Error を投げる */

@@ -45,6 +45,8 @@ export class Race {
   sectionIndex: number;
   /** 区間ごとのタイム（ミリ秒）。まだ走っていない・飛ばした区間は null */
   readonly sectionTimesMs: (number | null)[] = SECTIONS.map(() => null);
+  /** レース全体で転んだ回数 */
+  fallCount = 0;
   /** 区間ごとのポイント（倍率をかける前）。まだ走っていない・飛ばした区間は null */
   readonly sectionScores: (SectionScore | null)[] = SECTIONS.map(() => null);
 
@@ -129,6 +131,11 @@ export class Race {
   /** 今の区間のラストスパートボーナスを記録する */
   setSpurt(points: number): void {
     this.currentScore.spurt = points;
+  }
+
+  /** 転んだ回数を数える */
+  addFall(): void {
+    this.fallCount++;
   }
 
   /** 今の区間のラストスパートのポイントに足す（連打1回ごとのポイントや、ゴール時のボーナス） */

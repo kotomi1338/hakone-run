@@ -3,12 +3,11 @@ import { createTextures } from "./art/textures";
 import { playSe, preloadSounds } from "./audio";
 import { bindGameKeys, formatTime } from "./input";
 import { FONT, GAME_HEIGHT, GAME_WIDTH, TEXT_COLOR } from "./layout";
-import { Race, sectionsOfStage, STAGE_NAMES, type Stage } from "./race";
+import { Race } from "./race";
 import { buildSubmission } from "./ranking";
-import { submitRanking } from "./rankingApi";
+import { fetchRankFor, submitRanking } from "./rankingApi";
 import type { RankingSceneData } from "./RankingScene";
 import type { RunSceneData } from "./RunScene";
-import type { SectionBreakdown } from "./score";
 import { createRankingForm } from "./ui/rankingForm";
 import { Effects } from "./view/effects";
 
@@ -17,7 +16,7 @@ export interface StageResultSceneData {
 }
 
 /** 行が順に出てくる間隔（ミリ秒） */
-const ROW_DELAY_MS = 90;
+const ROW_DELAY_MS = 150;
 
 /** 往路ゴール（5区の後）と総合ゴール（10区の後）の結果画面 */
 export class StageResultScene extends Phaser.Scene {
@@ -40,7 +39,6 @@ export class StageResultScene extends Phaser.Scene {
   create(): void {
     createTextures(this);
     const final = this.race.isFinished;
-    const stage = this.race.stage;
     const breakdown = this.race.breakdown();
     this.registry.set("race", this.race);
 
@@ -66,58 +64,53 @@ export class StageResultScene extends Phaser.Scene {
       .setScale(0.3);
     this.tweens.add({ targets: titleText, scale: 1, duration: 350, ease: "Back.Out" });
 
-    // 合計ポイント（数え上げる）
+    // ポイント（大きく、数え上げる）
+    this.add
+      .text(GAME_WIDTH / 2, 124, final ? "最終ポイント" : "ここまでのポイント", {
+        fontFamily: FONT,
+        fontSize: "22px",
+        color: "#6b7a8f",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5);
     const pointsText = this.add
-      .text(GAME_WIDTH - 48, 42, "0 pt", { fontFamily: FONT, fontSize: "28px", color: TEXT_COLOR, fontStyle: "bold" })
-      .setOrigin(1, 0);
-
-    // 区間タイムとポイントの一覧
-    const stages: Stage[] = final ? [1, 2] : [stage];
-    stages.forEach((s, col) => {
-      const x = stages.length === 1 ? GAME_WIDTH / 2 - 210 : 50 + col * 450;
-      // 総合ゴールは下にランキング登録フォームが出るので、行を少し詰める
-      this.drawStageTable(s, x, 108, breakdown.sections, final ? 34 : 40);
-    });
-
-    const summary = final
-      ? `往路 ${formatTime(this.race.totalMs(1))}   復路 ${formatTime(this.race.totalMs(2))}   総合 ${formatTime(this.race.totalMs())}`
-      : `往路 合計 ${formatTime(this.race.totalMs(1))}`;
-    this.reveal(
-      this.add
-        .text(GAME_WIDTH / 2, final ? 314 : 362, summary, { fontFamily: FONT, fontSize: "26px", color: TEXT_COLOR, fontStyle: "bold" })
-        .setOrigin(0.5, 0),
-    );
-    const pointLine = this.add
-      .text(GAME_WIDTH / 2, final ? 350 : 404, "", { fontFamily: FONT, fontSize: "26px", color: "#b8860b", fontStyle: "bold" })
-      .setOrigin(0.5, 0);
-    this.reveal(pointLine);
-
+      .text(GAME_WIDTH / 2, 178, "0 pt", { fontFamily: FONT, fontSize: "64px", color: "#b8860b", fontStyle: "bold" })
+      .setOrigin(0.5);
     const counter = { value: 0 };
-    const linePrefix = final
-      ? `全区間ボーナス ${breakdown.fullRelayBonus > 0 ? `+${breakdown.fullRelayBonus.toLocaleString()}` : "なし"}   最終ポイント `
-      : "ここまでのポイント ";
-    const showCount = () => {
-      const v = Math.round(counter.value).toLocaleString();
-      pointsText.setText(`${v} pt`);
-      pointLine.setText(`${linePrefix}${v} pt`);
-    };
-    showCount();
+    const showCount = () => pointsText.setText(`${Math.round(counter.value).toLocaleString()} pt`);
     this.tweens.add({
       targets: counter,
       value: breakdown.total,
-      // 行が多い総合ゴールでも待たせすぎないよう、数え上げは最大 1.5 秒後に始める
-      delay: Math.min(1500, ROW_DELAY_MS * this.rowIndex),
+      delay: 300,
       duration: 1200,
       ease: "Cubic.Out",
       onUpdate: showCount,
       onComplete: () => {
         showCount();
-        this.tweens.add({ targets: [pointLine, pointsText], scale: 1.12, duration: 160, yoyo: true });
+        this.tweens.add({ targets: pointsText, scale: 1.1, duration: 160, yoyo: true });
       },
     });
 
-    // 総合ゴール：ランキングに登録するか選ぶ。往路ゴール：Enter で復路へ
+    // タイム・転倒回数・現在順位（総合ゴールだけ）
     const canRegister = final && buildSubmission(this.race, "") !== null;
+    const rows: [string, string][] = [
+      [final ? "合計タイム" : "往路タイム", formatTime(final ? this.race.totalMs() : this.race.totalMs(1))],
+      ["転倒回数", `${this.race.fallCount}回`],
+    ];
+    if (canRegister) rows.push(["現在順位", "…"]);
+    const valueTexts = rows.map(([label, value], i) => this.drawStat(label, value, 246 + i * 42));
+    if (canRegister) {
+      const rankText = valueTexts[2];
+      fetchRankFor(breakdown.total, this.race.totalMs())
+        .then(({ rank, total }) => {
+          if (this.scene.isActive()) rankText.setText(`${rank}位（全${total + 1}件中）`);
+        })
+        .catch(() => {
+          if (this.scene.isActive()) rankText.setText("-");
+        });
+    }
+
+    // 総合ゴール：ランキングに登録するか選ぶ。往路ゴール：Enter で復路へ
     if (canRegister) {
       this.showRankingForm();
     } else {
@@ -180,24 +173,20 @@ export class StageResultScene extends Phaser.Scene {
     this.events.once(Phaser.Scenes.Events.DESTROY, () => form.destroy());
   }
 
-  /** 文字を、順番に横から滑り込ませて表示する */
-  private reveal(text: Phaser.GameObjects.Text): void {
-    const x = text.x;
-    text.setAlpha(0).setX(x + 24);
-    this.tweens.add({ targets: text, alpha: 1, x, delay: ROW_DELAY_MS * this.rowIndex++, duration: 260, ease: "Quad.Out" });
-  }
-
-  private drawStageTable(stage: Stage, x: number, y: number, sections: SectionBreakdown[], rowH: number): void {
-    const style = { fontFamily: FONT, fontSize: "20px", color: TEXT_COLOR };
-    this.reveal(this.add.text(x, y, STAGE_NAMES[stage], { ...style, fontStyle: "bold" }));
-    sectionsOfStage(stage).forEach((s, i) => {
-      const time = this.race.sectionTimesMs[s.no - 1];
-      const score = sections.find((b) => b.no === s.no);
-      const row = `${String(s.no).padStart(2, " ")}区  ${s.from} → ${s.to}`;
-      const rowY = y + 34 + i * rowH;
-      this.reveal(this.add.text(x, rowY, row, style));
-      this.reveal(this.add.text(x + 300, rowY, time === null ? "-" : formatTime(time), style).setOrigin(1, 0));
-      this.reveal(this.add.text(x + 420, rowY, score ? `${score.total.toLocaleString()} pt` : "-", style).setOrigin(1, 0));
-    });
+  /** 「ラベル　値」の1行。順番に横から滑り込ませる。値の文字（あとから書き換える用）を返す */
+  private drawStat(label: string, value: string, y: number): Phaser.GameObjects.Text {
+    const labelText = this.add
+      .text(GAME_WIDTH / 2 - 20, y, label, { fontFamily: FONT, fontSize: "24px", color: "#6b7a8f", fontStyle: "bold" })
+      .setOrigin(1, 0.5);
+    const valueText = this.add
+      .text(GAME_WIDTH / 2 + 20, y, value, { fontFamily: FONT, fontSize: "28px", color: TEXT_COLOR, fontStyle: "bold" })
+      .setOrigin(0, 0.5);
+    for (const t of [labelText, valueText]) {
+      const x = t.x;
+      t.setAlpha(0).setX(x + 24);
+      this.tweens.add({ targets: t, alpha: 1, x, delay: 500 + ROW_DELAY_MS * this.rowIndex, duration: 260, ease: "Quad.Out" });
+    }
+    this.rowIndex++;
+    return valueText;
   }
 }
